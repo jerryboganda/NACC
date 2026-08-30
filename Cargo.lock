@@ -2076,9 +2076,9 @@ dependencies = [
 name = "nacc-git"
 version = "0.0.1"
 dependencies = [
- "nacc-domain",
- "serde",
  "thiserror 2.0.20",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2225,9 +2225,9 @@ dependencies = [
 name = "nacc-runtime"
 version = "0.0.1"
 dependencies = [
- "nacc-domain",
- "serde",
  "thiserror 2.0.20",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
