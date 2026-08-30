@@ -79,6 +79,15 @@ pub async fn get_app_diagnostics(state: State<'_, AppState>) -> Result<AppDiagno
     let storage_schema_version = match storage.schema_version().map_err(|e| e.to_string())? {
         rusqlite_migration::SchemaVersion::NoneSet => "none".to_string(),
         rusqlite_migration::SchemaVersion::Inside(n) => n.to_string(),
+        // A real, meaningful case, not a stub: the database's applied
+        // user_version is higher than any migration this build knows
+        // about -- e.g. a newer NACC version wrote it, then an older
+        // binary opened it (a real CI finding: `rusqlite_migration`
+        // 2.6.0's `SchemaVersion` has three variants, not the two an
+        // earlier docs.rs summary reported). Surfaced distinctly rather
+        // than folded into "Inside" so this is diagnosable from the
+        // diagnostics screen itself, not just from a crash.
+        rusqlite_migration::SchemaVersion::Outside(n) => format!("outside ({n})"),
     };
 
     Ok(AppDiagnostics {
