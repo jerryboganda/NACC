@@ -187,7 +187,13 @@ impl Database {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {SELECT_COLUMNS} FROM audit_events WHERE workflow_run_id = ?1 ORDER BY created_at_millis"
             ))?;
-            stmt.query_map([id_str], row_to_raw)?.collect()
+            // Bound to a local first, not returned directly: the `?` in
+            // tail position creates a temporary that Rust's drop-order
+            // rules would otherwise extend past `conn`/`stmt`'s own drop
+            // at the end of this block (a real `E0597` this workspace's
+            // own CI caught, not a style preference).
+            let rows = stmt.query_map([id_str], row_to_raw)?.collect();
+            rows
         })
         .await
         .expect("storage worker thread panicked")?;
