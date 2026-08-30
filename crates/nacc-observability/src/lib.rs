@@ -108,13 +108,23 @@ mod tests {
 
     #[test]
     fn workflow_run_span_carries_the_correlation_field() {
-        let run_id = nacc_domain::WorkflowRunId::new();
-        let span = workflow_run_span(run_id);
-        // A real assertion on span field values requires a subscriber
-        // installed to record them; here we assert the simpler, still
-        // meaningful invariant that entering and exiting the span does
-        // not panic and the span is not the disabled/no-op span.
-        assert!(!span.is_disabled());
-        let _enter = span.enter();
+        // A *scoped* subscriber (tracing::subscriber::with_default), not
+        // the global one init_tracing installs: tracing_subscriber's
+        // global default can only be set once per process, and Rust's
+        // test harness runs tests in parallel, so asserting
+        // `!span.is_disabled()` against global state race-depends on
+        // whether the *other* test in this file happened to call
+        // `try_init()` first -- confirmed the hard way by this
+        // workspace's own CI, which failed this exact assertion on a
+        // run where test order put this one first. Scoping the
+        // subscriber to this test's own closure makes the assertion
+        // deterministic regardless of execution order.
+        let subscriber = tracing_subscriber::fmt().finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let run_id = nacc_domain::WorkflowRunId::new();
+            let span = workflow_run_span(run_id);
+            assert!(!span.is_disabled());
+            let _enter = span.enter();
+        });
     }
 }
