@@ -59,6 +59,14 @@ pub fn run() {
             let guard = nacc_observability::init_tracing(&log_dir, cfg!(debug_assertions))
                 .expect("failed to initialize tracing");
 
+            let diagnostics_run_id = nacc_domain::WorkflowRunId::new();
+            // Real usage of the correlation-span helper (not just its own
+            // test) -- every startup log line below carries
+            // workflow_run_id, demonstrating the pattern later phases
+            // repeat for project/node-run/attempt/provider-session/etc.
+            // correlation IDs (master plan S22).
+            let _startup_span = nacc_observability::workflow_run_span(diagnostics_run_id).entered();
+
             tracing::info!(
                 app_version = env!("CARGO_PKG_VERSION"),
                 dev_mode = cfg!(debug_assertions),
@@ -66,7 +74,7 @@ pub fn run() {
             );
 
             app.manage(AppState {
-                diagnostics_run_id: nacc_domain::WorkflowRunId::new(),
+                diagnostics_run_id,
                 _tracing_guard: guard,
             });
 

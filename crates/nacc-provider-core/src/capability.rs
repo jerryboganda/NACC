@@ -94,17 +94,6 @@ pub struct CapabilitySnapshot {
     pub captured_at_millis: u64,
 }
 
-/// Milliseconds since the Unix epoch, for stamping a freshly captured
-/// `CapabilitySnapshot`. A thin wrapper so call sites do not each repeat
-/// the `SystemTime` -> `u64` conversion (and its fallible
-/// `duration_since` call) inline.
-pub fn now_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum AcpTransport {
@@ -117,6 +106,20 @@ pub enum AcpTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Milliseconds since the Unix epoch. Not a standalone `pub fn` in
+    /// non-test code: nothing constructs a real `CapabilitySnapshot` yet
+    /// (that is Phase 4/5 work, once a real adapter actually probes a
+    /// provider), so a reusable public helper would be genuinely dead
+    /// code from the lib target's perspective -- confirmed the hard way
+    /// by this workspace's own CI (`error: function 'now_millis' is
+    /// never used`). Inlined here, where it is actually used.
+    fn now_millis_for_test() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
 
     #[test]
     fn capability_snapshot_roundtrips_through_json() {
@@ -140,7 +143,7 @@ mod tests {
             acp_transport: AcpTransport::Native,
             usage_reporting: true,
             cancellation_documented: false,
-            captured_at_millis: now_millis(),
+            captured_at_millis: now_millis_for_test(),
         };
         let json = serde_json::to_string(&snap).unwrap();
         let back: CapabilitySnapshot = serde_json::from_str(&json).unwrap();
@@ -148,7 +151,7 @@ mod tests {
         assert_eq!(back.acp_transport, AcpTransport::Native);
         assert!(
             back.captured_at_millis > 0,
-            "now_millis() must produce a real, nonzero timestamp"
+            "now_millis_for_test() must produce a real, nonzero timestamp"
         );
     }
 }
