@@ -1,0 +1,175 @@
+# Phase 0 foundation-audit evidence workflow.
+#
+# Builds and tests the UPSTREAM AgentPanel project (github.com/GrillerGeek/AgentPanel)
+# at a pinned commit — NOT this repository's own code, which at this point in
+# Phase 0 is documentation only. This is the reproducible-clean-Windows-build
+# evidence required by the master plan's §5.4 decision gate and the build
+# prompt's Phase 0 deliverables.
+#
+# Windows-only by design (see docs/adr/0001-foundation-selection.md): this is
+# a Windows-first product and upstream's own PR CI (check.yml) never compiles
+# its `#[cfg(windows)]` code, which is exactly the code this audit needs to
+# verify.
+name: Foundation Audit (upstream AgentPanel, pinned SHA)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_sha:
+        description: "Upstream AgentPanel commit SHA to audit"
+        required: true
+        default: "1b7e21f512de694ecc8368d22b1968594fb54e7b"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-audit-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  audit-windows:
+    name: Build + test upstream on windows-latest
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout upstream AgentPanel at pinned SHA
+        uses: actions/checkout@v4
+        with:
+          repository: GrillerGeek/AgentPanel
+          ref: ${{ github.event.inputs.upstream_sha }}
+          path: upstream
+          persist-credentials: false
+
+      - name: Record exact commit under audit
+        working-directory: upstream
+        run: |
+          git log -1 --format="Commit: %H%nAuthor date: %ad%nSubject: %s" --date=iso
+          if ("${{ github.event.inputs.upstream_sha }}" -ne (git rev-parse HEAD)) {
+            Write-Error "Checked-out HEAD does not match requested upstream_sha input"
+            exit 1
+          }
+
+      - name: Install Rust (pinned >= Tauri 2.12's declared MSRV of 1.90)
+        uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy, rustfmt
+
+      - name: Cache cargo registry + git + upstream target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            upstream/src-tauri/target
+          key: foundation-audit-cargo-${{ github.event.inputs.upstream_sha }}-${{ hashFiles('upstream/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            foundation-audit-cargo-${{ github.event.inputs.upstream_sha }}-
+            foundation-audit-cargo-
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: upstream/package-lock.json
+
+      - name: npm ci
+        working-directory: upstream
+        run: npm ci
+
+      - name: Frontend build (tsc + vite)
+        working-directory: upstream
+        run: npm run build
+
+      - name: Frontend tests (Vitest)
+        working-directory: upstream
+        run: npm test
+
+      - name: cargo fmt --check
+        working-directory: upstream/src-tauri
+        run: cargo fmt --all -- --check
+        continue-on-error: true # evidence, not a gate: record the real result either way
+
+      - name: cargo clippy
+        working-directory: upstream/src-tauri
+        run: cargo clippy --all-targets --all-features -- -D warnings
+        continue-on-error: true
+
+      - name: cargo check
+        working-directory: upstream/src-tauri
+        run: cargo check --all-targets
+
+      - name: cargo test
+        working-directory: upstream/src-tauri
+        run: cargo test --all-features
+
+      - name: Dependency + license inventory (cargo metadata)
+        working-directory: upstream/src-tauri
+        run: |
+          cargo metadata --format-version=1 > $env:GITHUB_WORKSPACE/cargo-metadata.json
+          $meta = Get-Content $env:GITHUB_WORKSPACE/cargo-metadata.json -Raw | ConvertFrom-Json
+          $rows = $meta.packages | Sort-Object name | ForEach-Object {
+            [PSCustomObject]@{ name = $_.name; version = $_.version; license = $_.license }
+          }
+          $rows | Export-Csv -Path $env:GITHUB_WORKSPACE/dependency-licenses.csv -NoTypeInformation
+          $nonPermissive = $rows | Where-Object {
+            $_.license -and ($_.license -match 'GPL' -or $_.license -match 'AGPL')
+          }
+          if ($nonPermissive) {
+            Write-Host "::warning::Found copyleft-licensed dependencies:"
+            $nonPermissive | Format-Table | Out-String | Write-Host
+          } else {
+            Write-Host "No GPL/AGPL-family license strings found among $($rows.Count) resolved packages."
+          }
+
+      - name: Generate ephemeral Tauri updater signing key (build-only, never persisted)
+        working-directory: upstream
+        run: |
+          # tauri.conf.json sets bundle.createUpdaterArtifacts: true, which requires
+          # a signing key to be present at build time. This is upstream's own config
+          # pointing at Jason Robey's real public key/endpoint — we deliberately do
+          # not have and will never use his private key. To get real, honest build
+          # evidence without touching his release channel, generate a throwaway
+          # keypair scoped to this job only. The resulting installer is unsigned
+          # audit evidence, not a distributable release artifact.
+          npx --yes @tauri-apps/cli signer generate -w $env:RUNNER_TEMP/audit-signing-key --password ""
+          $key = Get-Content $env:RUNNER_TEMP/audit-signing-key -Raw
+          echo "TAURI_SIGNING_PRIVATE_KEY=$key" >> $env:GITHUB_ENV
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" >> $env:GITHUB_ENV
+
+      - name: Tauri build (Windows NSIS installer)
+        working-directory: upstream
+        run: npx tauri build
+        env:
+          CI: true
+
+      - name: Locate build outputs
+        working-directory: upstream
+        run: |
+          Write-Host "--- NSIS bundle dir ---"
+          Get-ChildItem -Recurse -Path "src-tauri/target/release/bundle" -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length | Format-Table -AutoSize
+
+      - name: Upload NSIS installer
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentpanel-windows-installer-${{ github.event.inputs.upstream_sha }}
+          path: upstream/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload dependency/license inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-license-inventory-${{ github.event.inputs.upstream_sha }}
+          path: |
+            dependency-licenses.csv
+            cargo-metadata.json
+          retention-days: 90
