@@ -84,6 +84,46 @@ own `serde_json` encoding rather than a hand-written second `Display`/
 representation, instead of two that could silently drift apart. See
 `nacc-storage/src/migrations.rs`'s own doc comment.
 
+**Verified end-to-end, not just green-checkmarked**: this code could not
+be compiled locally at all (no Windows SDK on this machine, confirmed the
+hard way this session -- even `serde`'s own build script fails to link
+here), so every claim above rests on real CI evidence, not local
+`cargo check`. The first three pushes each failed clippy on a real,
+distinct bug, fixed in sequence rather than guessed around in one shot:
+
+1. `error[E0277]: the trait specta::Type is not implemented for
+   serde_json::Value` (`Event.payload`) -- specta gates external-crate
+   `Type` impls behind a feature flag per crate, same as Phase 1's `uuid`
+   discovery; fixed by adding `serde_json` to the workspace's `specta`
+   feature list, verified against specta's own `Cargo.toml` first.
+2. `error[E0597]: 'conn'/'stmt' does not live long enough`, in all three
+   `list_*` repository functions (`audit.rs`, `events.rs`,
+   `role_profiles.rs`) -- `stmt.query_map(...)?.collect()` in tail
+   position creates a `?`-operator temporary that Rust's drop-order rules
+   extend past the block's own `conn`/`stmt` locals. Fixed identically in
+   all three by binding the result to a local variable before returning
+   it (the compiler's own suggested fix).
+3. `error[E0004]: non-exhaustive patterns:
+   rusqlite_migration::SchemaVersion::Outside(_) not covered` in
+   `diagnostics.rs` -- `SchemaVersion` has three variants (`NoneSet`,
+   `Inside`, `Outside`), not the two an earlier docs.rs summary reported;
+   fixed with real display text for `Outside` (a genuine state: the
+   database's `user_version` is higher than any migration this build's
+   `Migrations` list knows about), not a stub.
+
+Run [33330656904](https://github.com/jerryboganda/NACC/actions/runs/33330656904)
+(SHA `038a259`) passed all 21 steps -- `cargo fmt`, `cargo clippy
+--workspace --all-targets --all-features -D warnings`, `cargo test
+--workspace` (every test in this section's new code actually ran and
+passed: migration upgrade-path tests, settings/role-profile/event/audit
+repository tests, the backup/restore round trip), bindings regeneration,
+the frontend build type-checking against those real bindings, Vitest, and
+a real signed `tauri build` -- confirmed via
+`gh api repos/jerryboganda/NACC/actions/runs/.../artifacts` returning a
+genuine, non-expired, SHA256-digested installer artifact
+(`nacc-windows-installer-038a259...`, 4,224,969 bytes), not just a green
+step.
+
 ## Toolchain, pinned and verified (not assumed)
 
 | | Version | Verified |
