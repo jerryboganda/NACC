@@ -84,10 +84,17 @@ tauri-plugin-updater = "2.10.1"
 # "uuid" enables specta's Type impl for uuid::Uuid, which nacc-domain's
 # define_id! macro wraps directly -- without it, cargo clippy fails with
 # `error[E0277]: the trait specta::Type is not implemented for uuid::Uuid`
-# (found via this workspace's own CI, not anticipated in advance).
-# "derive" is explicit here rather than relied on via feature unification
-# from tauri-specta's own specta dependency, which does not request it.
-specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid"] }
+# (found via this workspace's own CI, not anticipated in advance). "derive"
+# is explicit here rather than relied on via feature unification from
+# tauri-specta's own specta dependency, which does not request it. "serde_json"
+# is the identical pattern for nacc_events::Event's `payload: serde_json::Value`
+# field (master plan S8.2's normalized events carry event-specific data as
+# loose JSON, not a per-event-type struct) -- verified against specta's own
+# Cargo.toml (`serde_json = ["dep:serde_json"]`) before adding it, having
+# already learned from the uuid case that a compatible external crate being a
+# dependency is not sufficient; specta gates its Type impl per crate behind an
+# explicit feature every time.
+specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid", "serde_json"] }
 specta-typescript = "0.0.12"
 tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }
 
