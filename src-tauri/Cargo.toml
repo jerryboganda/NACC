@@ -9,7 +9,18 @@ publish.workspace = true
 
 [lib]
 name = "nacc_app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# staticlib/cdylib are mobile-target boilerplate (Android/iOS need them to
+# embed the Rust core into a native shell) copied reflexively from a
+# typical Tauri scaffold. This project has no mobile target -- master
+# plan: "Windows 10/11, Windows-first with later Linux/macOS
+# portability" -- and the extra crate-types caused a real, reproducible
+# failure: `cargo test`'s export_bindings integration test crashed with
+# `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139), a classic symptom of
+# Windows DLL-export ambiguity when a crate is built as cdylib +
+# something else and a test binary links against it. Plain rlib is all
+# an integration test (or any future mobile target, added deliberately
+# and re-verified when it is actually needed) requires.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { workspace = true, features = ["codegen"] }
