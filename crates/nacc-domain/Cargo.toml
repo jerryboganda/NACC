@@ -1,0 +1,17 @@
+[package]
+name = "nacc-domain"
+description = "Core domain model: strongly typed IDs and value objects shared by every NACC crate. No dependency on any other NACC crate -- this is the foundation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+specta = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

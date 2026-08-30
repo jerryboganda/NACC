@@ -1,0 +1,13 @@
+[package]
+name = "nacc-process"
+description = "Windows Job Object process containment, ConPTY/PTY streaming, graceful and forced cancellation (master plan S10, S13.4 -- Phase 3 scope for real process supervision)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

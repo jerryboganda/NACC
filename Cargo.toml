@@ -1,0 +1,91 @@
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/nacc-domain",
+    "crates/nacc-storage",
+    "crates/nacc-events",
+    "crates/nacc-orchestrator",
+    "crates/nacc-provider-core",
+    "crates/nacc-provider-claude",
+    "crates/nacc-provider-codex",
+    "crates/nacc-provider-antigravity",
+    "crates/nacc-provider-copilot",
+    "crates/nacc-provider-opencode",
+    "crates/nacc-process",
+    "crates/nacc-runtime",
+    "crates/nacc-worktree",
+    "crates/nacc-git",
+    "crates/nacc-github",
+    "crates/nacc-policy",
+    "crates/nacc-quality",
+    "crates/nacc-review",
+    "crates/nacc-secrets",
+    "crates/nacc-observability",
+    "crates/nacc-updater",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+# Versions verified directly against crates.io on 2026-08-30 (see
+# docs/adr/0001-foundation-selection.md and docs/audits/foundation-audit.md
+# for the verification method this workspace follows). Only dependencies
+# actually used by a Phase 1 crate are pinned here; crates needed by later
+# phases (sqlx, portable-pty, notify, reqwest, keyring, secrecy, zeroize,
+# ...) are deliberately NOT pre-declared -- they get verified fresh, at the
+# point they are actually adopted, per the master plan's "discover/validate
+# dynamically, don't hard-code" principle (S2.7).
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+anyhow = "1.0.104"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+tracing-appender = "0.2.5"
+uuid = { version = "1.26.0", features = ["v4", "serde"] }
+async-trait = "0.1.92"
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sync", "time", "process", "io-util"] }
+
+tauri = "2.11.5"
+tauri-build = "2.6.3" # default features include config-json, required since tauri.conf.json is JSON
+tauri-plugin-updater = "2.10.1"
+specta = "=2.0.0-rc.25"
+specta-typescript = "0.0.12"
+tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }
+
+nacc-domain = { path = "crates/nacc-domain" }
+nacc-storage = { path = "crates/nacc-storage" }
+nacc-events = { path = "crates/nacc-events" }
+nacc-orchestrator = { path = "crates/nacc-orchestrator" }
+nacc-provider-core = { path = "crates/nacc-provider-core" }
+nacc-provider-claude = { path = "crates/nacc-provider-claude" }
+nacc-provider-codex = { path = "crates/nacc-provider-codex" }
+nacc-provider-antigravity = { path = "crates/nacc-provider-antigravity" }
+nacc-provider-copilot = { path = "crates/nacc-provider-copilot" }
+nacc-provider-opencode = { path = "crates/nacc-provider-opencode" }
+nacc-process = { path = "crates/nacc-process" }
+nacc-runtime = { path = "crates/nacc-runtime" }
+nacc-worktree = { path = "crates/nacc-worktree" }
+nacc-git = { path = "crates/nacc-git" }
+nacc-github = { path = "crates/nacc-github" }
+nacc-policy = { path = "crates/nacc-policy" }
+nacc-quality = { path = "crates/nacc-quality" }
+nacc-review = { path = "crates/nacc-review" }
+nacc-secrets = { path = "crates/nacc-secrets" }
+nacc-observability = { path = "crates/nacc-observability" }
+nacc-updater = { path = "crates/nacc-updater" }
+
+[profile.release]
+panic = "unwind"   # a provider-adapter panic must not crash the whole app; caught at the process/task boundary
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+panic = "unwind"

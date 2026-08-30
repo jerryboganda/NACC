@@ -1,0 +1,13 @@
+[package]
+name = "nacc-events"
+description = "Durable event model and subscriptions backing the audit trail and run history (master plan S6, S22 -- Phase 2 scope for the real event store)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

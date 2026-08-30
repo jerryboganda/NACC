@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window. Deliberately minimal for Phase 1: no fs:*, shell:*, http:*, or dialog/clipboard/notification permissions -- those are added only when a specific, reviewed feature needs them (master plan S13.1, S13.2). The webview never receives a general shell or filesystem capability; all privileged operations go through typed Rust commands instead.",
+  "windows": ["main"],
+  "permissions": ["core:default", "updater:default"]
+}

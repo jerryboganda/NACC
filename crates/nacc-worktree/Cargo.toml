@@ -1,0 +1,13 @@
+[package]
+name = "nacc-worktree"
+description = "Git worktree lease lifecycle: allocation, drift detection, quarantine, safe cleanup (master plan S11, S16 -- Phase 3 scope for real lease management)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

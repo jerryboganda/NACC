@@ -1,0 +1,19 @@
+[package]
+name = "nacc-observability"
+description = "Structured logging, tracing initialization, and correlation-id conventions shared by every NACC crate (master plan S4.2, S22)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }

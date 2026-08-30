@@ -1,0 +1,13 @@
+[package]
+name = "nacc-quality"
+description = "Deterministic quality-gate execution: formatter, lint, typecheck, test, build, packaging commands (master plan S20 -- Phase 9 scope for real gate execution)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

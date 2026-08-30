@@ -1,0 +1,9 @@
+# Pinned ahead of Tauri 2.12's declared MSRV bump (1.77.2 -> 1.90, PR #13221,
+# merged to the tauri `dev` branch 2026-07-02) so that upgrade is a non-event.
+# See docs/adr/0001-foundation-selection.md and the Phase 0 audit for the
+# evidence trail. This exact version was already verified building the
+# workspace's Windows CI (see .github/workflows/foundation-audit.yml).
+[toolchain]
+channel = "1.90.0"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-msvc"]

@@ -1,0 +1,13 @@
+[package]
+name = "nacc-github"
+description = "GitHub and GitHub Actions integration: PRs, checks, workflow runs, jobs, logs, artifacts (master plan S4.6, S19 -- Phase 10 scope for real GitHub integration)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

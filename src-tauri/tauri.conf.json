@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Native Agent Control Center",
+  "version": "0.0.1",
+  "identifier": "com.nacc.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Native Agent Control Center",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "'self' ipc: http://ipc.localhost",
+        "img-src": "'self' asset: http://asset.localhost data:",
+        "style-src": "'self' 'unsafe-inline'",
+        "script-src": "'self'",
+        "font-src": "'self'"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis"],
+    "publisher": "NACC",
+    "copyright": "Copyright (c) 2026",
+    "category": "DeveloperTool",
+    "shortDescription": "Native Agent Control Center",
+    "longDescription": "A Windows-first desktop control center for orchestrating multiple native coding-agent CLIs through a GUI Role Matrix, isolated Git worktrees, deterministic quality gates, and approval-gated CI/CD.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwMTQ0MEU2NjI4NTQ2N0EKUldSNlJvVmk1a0FVb0p0U0Fndms1WDJpWnFJMnZwVlJkRFhXQVZwWUdBT0s5NEthL3JWNDlQdDcK",
+      "endpoints": [
+        "https://github.com/jerryboganda/NACC/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

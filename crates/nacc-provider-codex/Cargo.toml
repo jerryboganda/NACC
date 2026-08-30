@@ -1,0 +1,18 @@
+[package]
+name = "nacc-provider-codex"
+description = "Provider adapter crate for the Codex CLI (master plan S9). Implements AgentProvider from nacc-provider-core; real CLI-invocation logic lands in a later phase (see docs/provider-adapters/)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+nacc-provider-core = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

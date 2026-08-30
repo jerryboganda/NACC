@@ -1,0 +1,54 @@
+[package]
+name = "nacc-app"
+description = "Native Agent Control Center -- Tauri 2 desktop shell and composition root wiring every NACC crate together."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "nacc_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { workspace = true, features = ["codegen"] }
+
+[dependencies]
+tauri = { workspace = true }
+tauri-plugin-updater = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+specta = { workspace = true }
+specta-typescript = { workspace = true }
+tauri-specta = { workspace = true }
+tracing-appender = { workspace = true }
+
+# Every NACC library crate is wired into the composition root here, even
+# where a crate is not yet called from any command (most are Phase 1
+# boundary-only stubs -- see each crate's own doc comment for its target
+# phase). This keeps `cargo tree` an honest picture of the intended final
+# application shape rather than 20 floating, disconnected libraries.
+nacc-domain = { workspace = true }
+nacc-observability = { workspace = true }
+nacc-storage = { workspace = true }
+nacc-events = { workspace = true }
+nacc-orchestrator = { workspace = true }
+nacc-provider-core = { workspace = true }
+nacc-provider-claude = { workspace = true }
+nacc-provider-codex = { workspace = true }
+nacc-provider-antigravity = { workspace = true }
+nacc-provider-copilot = { workspace = true }
+nacc-provider-opencode = { workspace = true }
+nacc-process = { workspace = true }
+nacc-runtime = { workspace = true }
+nacc-worktree = { workspace = true }
+nacc-git = { workspace = true }
+nacc-github = { workspace = true }
+nacc-policy = { workspace = true }
+nacc-quality = { workspace = true }
+nacc-review = { workspace = true }
+nacc-secrets = { workspace = true }
+nacc-updater = { workspace = true }

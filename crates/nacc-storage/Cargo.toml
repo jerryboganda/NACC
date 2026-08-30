@@ -1,0 +1,13 @@
+[package]
+name = "nacc-storage"
+description = "SQLite persistence and versioned migrations for durable NACC state (master plan S16 -- Phase 2 scope for real schema and migrations)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

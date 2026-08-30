@@ -1,0 +1,13 @@
+[package]
+name = "nacc-updater"
+description = "Signed update coordination for the Tauri updater (master plan S13.7 -- Phase 12 scope for real signing/verification; the Phase 1 dev keypair itself lives in src-tauri/tauri.conf.json)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,13 @@
+[package]
+name = "nacc-git"
+description = "Typed Git operations invoked via the installed git CLI with argument arrays, never interpolated shell strings (master plan S4.5 -- Phase 3 scope for real git invocation)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nacc-domain = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
