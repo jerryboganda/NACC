@@ -59,7 +59,13 @@ tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sy
 tauri = "2.11.5"
 tauri-build = "2.6.3" # default features include config-json, required since tauri.conf.json is JSON
 tauri-plugin-updater = "2.10.1"
-specta = "=2.0.0-rc.25"
+# "uuid" enables specta's Type impl for uuid::Uuid, which nacc-domain's
+# define_id! macro wraps directly -- without it, cargo clippy fails with
+# `error[E0277]: the trait specta::Type is not implemented for uuid::Uuid`
+# (found via this workspace's own CI, not anticipated in advance).
+# "derive" is explicit here rather than relied on via feature unification
+# from tauri-specta's own specta dependency, which does not request it.
+specta = { version = "=2.0.0-rc.25", features = ["derive", "uuid"] }
 specta-typescript = "0.0.12"
 tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }
 
