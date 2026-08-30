@@ -36,6 +36,7 @@ specta = { workspace = true }
 specta-typescript = { workspace = true }
 tauri-specta = { workspace = true }
 tracing-appender = { workspace = true }
+rusqlite_migration = { workspace = true }
 
 # Every NACC library crate is wired into the composition root here, even
 # where a crate is not yet called from any command (most are Phase 1

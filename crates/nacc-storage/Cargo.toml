@@ -1,6 +1,6 @@
 [package]
 name = "nacc-storage"
-description = "SQLite persistence and versioned migrations for durable NACC state (master plan S16 -- Phase 2 scope for real schema and migrations)."
+description = "SQLite persistence and versioned migrations for durable NACC state (master plan S4.4/S16 -- Phase 2 scope for real schema and migrations)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,5 +9,10 @@ publish.workspace = true
 
 [dependencies]
 nacc-domain = { workspace = true }
-serde = { workspace = true }
+nacc-events = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+rusqlite_migration = { workspace = true }

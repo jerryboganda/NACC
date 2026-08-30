@@ -1,25 +1,31 @@
 //! The first real, end-to-end typed IPC command (Phase 1's proof that the
 //! whole pipe works): Rust command -> specta type export -> generated
-//! TypeScript bindings -> React call -> rendered result.
+//! TypeScript bindings -> React call -> rendered result. Phase 2 extends
+//! it into a real storage round trip too: every call writes one audit
+//! record through `nacc-storage` and reads back how many this session has
+//! recorded, so the count in the returned struct is live data, not a
+//! placeholder -- watchable by simply reopening the diagnostics view.
 //!
 //! Deliberately not a "Projects" or "Role Matrix" feature yet -- those are
-//! Phase 2/6 scope with real domain data behind them. This command only
-//! proves the mechanism, using one real domain type
-//! (`nacc_domain::WorkflowRunId`) so the round trip exercises an actual
-//! strongly-typed ID, not just primitive strings and numbers.
+//! Phase 6 scope with real domain data behind them. This command only
+//! proves the mechanism, using real domain types
+//! (`nacc_domain::WorkflowRunId`, `nacc_events::AuditRecord`) so the round
+//! trip exercises actual strongly-typed IDs and real persistence, not just
+//! primitive strings and numbers.
 
 use serde::Serialize;
 use tauri::State;
 
 use nacc_domain::WorkflowRunId;
+use nacc_events::AuditRecord;
 
-use crate::AppState;
+use crate::{now_millis, AppState};
 
 #[derive(Clone, Debug, Serialize, specta::Type)]
 pub struct AppDiagnostics {
     pub app_version: String,
     /// Kept in sync by hand with the root `Cargo.toml`'s `[workspace]
-    /// members` list (currently 20 library crates + this application
+    /// members` list (currently 21 library crates + this application
     /// shell). Not worth a build-time Cargo.toml parser for a diagnostics
     /// display value at this phase.
     pub workspace_crate_count: u32,
@@ -33,18 +39,57 @@ pub struct AppDiagnostics {
     /// bare UUID -- serializes correctly across the IPC boundary and
     /// deserializes back into a matching TypeScript type.
     pub sample_workflow_run_id: WorkflowRunId,
+    /// The applied SQLite schema version (master plan S4.4), formatted for
+    /// display. Proves `nacc-storage`'s migrations genuinely ran against
+    /// the real on-disk database this process opened, not an in-memory
+    /// test double.
+    pub storage_schema_version: String,
+    /// How many audit records this command has ever written for
+    /// `sample_workflow_run_id`, read back fresh on every call. A real,
+    /// live query result: it increments by one each time this command
+    /// runs, which is directly observable by calling it twice in the same
+    /// running app -- not a static or precomputed value.
+    pub diagnostics_requests_recorded: u32,
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_app_diagnostics(state: State<'_, AppState>) -> AppDiagnostics {
-    AppDiagnostics {
+pub async fn get_app_diagnostics(state: State<'_, AppState>) -> Result<AppDiagnostics, String> {
+    let storage = state.storage.clone();
+
+    let record = AuditRecord::new(
+        "diagnostics_command".to_string(),
+        "get_app_diagnostics".to_string(),
+        None,
+        Some(state.diagnostics_run_id),
+        None,
+        None,
+        now_millis(),
+    );
+    storage
+        .append_audit_record(&record)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let recorded = storage
+        .list_audit_records_for_workflow_run(state.diagnostics_run_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let storage_schema_version = match storage.schema_version().map_err(|e| e.to_string())? {
+        rusqlite_migration::SchemaVersion::NoneSet => "none".to_string(),
+        rusqlite_migration::SchemaVersion::Inside(n) => n.to_string(),
+    };
+
+    Ok(AppDiagnostics {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         workspace_crate_count: 21,
         minimum_rust_version: env!("CARGO_PKG_RUST_VERSION").to_string(),
         dev_mode: cfg!(debug_assertions),
         sample_workflow_run_id: state.diagnostics_run_id,
-    }
+        storage_schema_version,
+        diagnostics_requests_recorded: recorded.len() as u32,
+    })
 }
 
 #[cfg(test)]

@@ -6,13 +6,21 @@
 //! "Provider crates depend on a common provider core... the orchestrator
 //! depends on abstractions, not concrete CLI parsers."
 //!
-//! Phase 1 deliberately defines only the ID types needed to carry a real,
-//! meaningful value across the first typed IPC round trip (see
-//! `src-tauri`'s `get_app_diagnostics` command). The full ~29-entity domain
-//! model the master plan lists in S7 (Project, WorkflowRun, TaskContract,
-//! AgentHandoff, WorktreeLease, ...) is Phase 2 scope ("durable
-//! domain/storage/events"). `define_id!` below is the extension point Phase
-//! 2 uses to add the rest without changing this pattern.
+//! Phase 1 defined only the ID types needed to carry a real, meaningful
+//! value across the first typed IPC round trip (see `src-tauri`'s
+//! `get_app_diagnostics` command). Phase 2 ("durable domain/storage/events",
+//! master plan S4.4) adds the subset of the full ~29-entity domain model
+//! (S7) that `nacc-storage` and `nacc-events` genuinely persist and query
+//! now: `NodeRunId` and `AttemptId` for the correlation IDs S22 requires on
+//! every event/audit record, `EventId` for the normalized event stream
+//! (S6/S8.2), `AuditEventId` for the audit trail (S22). The rest of S7's
+//! entities (`WorkflowTemplate`, `TaskContract`, `AgentHandoff`,
+//! `WorktreeLease`, `QualityGateResult`, ...) are added by whichever later
+//! phase's crate first has real logic that consumes them (see each
+//! placeholder crate's own doc comment for its target phase) -- adding an
+//! ID type with no real caller yet is exactly the kind of speculative code
+//! this workspace has deliberately avoided since Phase 1 (see nacc-storage
+//! and nacc-events' own doc comments on scope discipline).
 
 use std::fmt;
 use std::str::FromStr;
@@ -108,6 +116,22 @@ define_id!(
 define_id!(
     ProviderAccountId,
     "Identifies one configured account profile for a provider (a provider may have several)."
+);
+define_id!(
+    NodeRunId,
+    "Identifies one execution of a workflow node within a `WorkflowRun` (master plan S7)."
+);
+define_id!(
+    AttemptId,
+    "Identifies one attempt of a `NodeRun` -- a node may be retried, and each retry is its own attempt (master plan S7)."
+);
+define_id!(
+    EventId,
+    "Identifies one entry in the durable, normalized event stream (master plan S6, S8.2, S22)."
+);
+define_id!(
+    AuditEventId,
+    "Identifies one entry in the audit trail (master plan S7's `AuditEvent`, S22's audit-record fields)."
 );
 
 /// A provider identifier. Unlike the UUID-backed IDs above, this is a
@@ -314,6 +338,62 @@ impl fmt::Display for PermissionProfile {
     }
 }
 
+/// The role catalog (Phase 0 plan addendum's "locked GUI requirement",
+/// binding on every later phase): every row is independently configurable
+/// and provider-swappable, and users can add custom roles beyond this
+/// built-in list. Deliberately open (`Custom(String)`), unlike the closed,
+/// provider-normalized event vocabulary in `nacc-events` -- a role is a
+/// user-facing organizational concept, not something adapters must map
+/// output onto.
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleKind {
+    BrainMainOrchestrator,
+    ArchitectPlanner,
+    RepositoryExplorer,
+    ExternalResearcher,
+    FrontendImplementer,
+    BackendImplementer,
+    DatabaseMigrationImplementer,
+    TestEngineer,
+    QaReviewer,
+    GeneralCodeReviewer,
+    SecurityReviewer,
+    AccessibilityUxReviewer,
+    PerformanceReviewer,
+    DocumentationWriter,
+    RefactorMigrationSpecialist,
+    CiCdInvestigator,
+    Integrator,
+    ReleaseManager,
+    Custom(String),
+}
+
+/// One configured Role Matrix row (master plan S7, S11): the four
+/// independently settable switches -- role (`role_kind`), model
+/// (`provider_id` + `model_id`), thinking (`thinking_mode`), and reasoning
+/// effort (`reasoning_level`) -- plus the permission profile it runs
+/// under. `provider_id`/`model_id` are `Option` because a role must be
+/// *assignable* without being permanently bound: the Phase 0 plan's
+/// binding constraint is "no role is ever hard-wired to one provider,"
+/// which an unassigned row (both `None`) represents just as validly as an
+/// assigned one. Persisted by `nacc-storage`'s role-profile repository
+/// (Phase 2); presented and edited by the Role Matrix GUI (Phase 6).
+#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+pub struct RoleProfile {
+    pub id: RoleProfileId,
+    pub name: String,
+    pub role_kind: RoleKind,
+    pub provider_id: Option<ProviderId>,
+    pub model_id: Option<ModelId>,
+    pub thinking_mode: ThinkingMode,
+    pub reasoning_level: ReasoningLevel,
+    pub permission_profile: PermissionProfile,
+    pub enabled: bool,
+    pub created_at_millis: u64,
+    pub updated_at_millis: u64,
+}
+
 #[cfg(test)]
 mod canonical_control_tests {
     use super::*;
@@ -348,5 +428,47 @@ mod canonical_control_tests {
             let back: PermissionProfile = serde_json::from_str(&json).unwrap();
             assert_eq!(p, back);
         }
+    }
+
+    #[test]
+    fn role_kind_builtin_variant_json_is_snake_case() {
+        let json = serde_json::to_string(&RoleKind::SecurityReviewer).unwrap();
+        assert_eq!(json, "\"security_reviewer\"");
+    }
+
+    #[test]
+    fn role_kind_custom_variant_roundtrips_the_users_own_name() {
+        // Phase 0 plan addendum: "users can add custom roles" -- the
+        // catalog above must never be the only option.
+        let kind = RoleKind::Custom("Localization Specialist".to_string());
+        let json = serde_json::to_string(&kind).unwrap();
+        let back: RoleKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, kind);
+    }
+
+    #[test]
+    fn role_profile_can_be_unassigned_without_being_invalid() {
+        // Binding Phase 0 constraint: a role must be assignable to any
+        // provider at any time, which includes not being assigned to one
+        // right now. `provider_id: None, model_id: None` must round-trip
+        // cleanly, not be treated as a malformed state.
+        let profile = RoleProfile {
+            id: RoleProfileId::new(),
+            name: "Primary Reviewer".to_string(),
+            role_kind: RoleKind::GeneralCodeReviewer,
+            provider_id: None,
+            model_id: None,
+            thinking_mode: ThinkingMode::Auto,
+            reasoning_level: ReasoningLevel::Auto,
+            permission_profile: PermissionProfile::ReadOnly,
+            enabled: true,
+            created_at_millis: 1_735_000_000_000,
+            updated_at_millis: 1_735_000_000_000,
+        };
+        let json = serde_json::to_string(&profile).unwrap();
+        let back: RoleProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, profile.id);
+        assert!(back.provider_id.is_none());
+        assert!(back.model_id.is_none());
     }
 }

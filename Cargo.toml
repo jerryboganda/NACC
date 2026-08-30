@@ -39,10 +39,10 @@ publish = false
 # Versions verified directly against crates.io on 2026-08-30 (see
 # docs/adr/0001-foundation-selection.md and docs/audits/foundation-audit.md
 # for the verification method this workspace follows). Only dependencies
-# actually used by a Phase 1 crate are pinned here; crates needed by later
-# phases (sqlx, portable-pty, notify, reqwest, keyring, secrecy, zeroize,
-# ...) are deliberately NOT pre-declared -- they get verified fresh, at the
-# point they are actually adopted, per the master plan's "discover/validate
+# actually used by a Phase 1/2 crate are pinned here; crates needed by later
+# phases (portable-pty, notify, reqwest, keyring, secrecy, zeroize, ...) are
+# deliberately NOT pre-declared -- they get verified fresh, at the point
+# they are actually adopted, per the master plan's "discover/validate
 # dynamically, don't hard-code" principle (S2.7).
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
@@ -55,6 +55,28 @@ tracing-appender = "0.2.5"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 async-trait = "0.1.92"
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "sync", "time", "process", "io-util"] }
+# Phase 2 storage. rusqlite over sqlx: verified via crates.io on
+# 2026-08-30 -- rusqlite 0.40.2 (31.5M recent downloads, updated 2026-08-08)
+# is a thin, synchronous, direct binding over the same libsqlite3-sys C
+# bindings sqlx itself uses, with no compile-time query-cache/build-time
+# coupling (sqlx's headline feature needs a live DB or committed
+# `.sqlx/` offline cache at build time -- exactly the kind of exotic
+# build-time surface this workspace's own CI history says to avoid; see
+# the STATUS_ENTRYPOINT_NOT_FOUND and workspace-target-path incidents in
+# docs/architecture/overview.md). NACC is a single-process, single-user
+# desktop app ("one local SQLite database per NACC user profile", master
+# plan S4.4) with no concurrent-multi-client story sqlx's async pool is
+# built for, so synchronous rusqlite calls wrapped in
+# `tokio::task::spawn_blocking` (nacc-storage's own pattern, documented
+# there) are the simpler, equally-correct fit. "bundled" statically links
+# SQLite into the binary -- no separate system DLL for a signed installer
+# to depend on.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+# 2.6.0, 2.2M recent downloads, updated 2026-05-28 -- embedded, versioned,
+# transactional migrations tracked via SQLite's own `user_version` pragma,
+# matching master plan S4.4's wording exactly ("embedded, versioned,
+# transactional where SQLite permits").
+rusqlite_migration = "2.6.0"
 
 tauri = "2.11.5"
 tauri-build = "2.6.3" # default features include config-json, required since tauri.conf.json is JSON

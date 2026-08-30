@@ -1,8 +1,8 @@
-# Architecture overview — Phase 1
+# Architecture overview — Phase 1–2
 
-**Status:** reflects what is actually implemented as of Phase 1
-("hardened Tauri/Rust modular foundation"). Updated as later phases land
-real logic; do not treat any "Phase N scope" note below as already done.
+**Status:** reflects what is actually implemented as of Phase 2 ("durable
+domain and storage"). Updated as later phases land real logic; do not treat
+any "Phase N scope" note below as already done.
 
 ## What Phase 1 delivers
 
@@ -12,6 +12,77 @@ and error handling, strict capabilities/CSP, reproducible frontend and
 desktop builds, and basic signed-updater development configuration. No
 business logic, no real provider CLI invocation, no durable storage, no
 workflow engine — those are later phases, listed per-crate below.
+
+## What Phase 2 delivers
+
+Per the master plan's roadmap (§24, §4.4): a real SQLite schema, embedded
+versioned transactional migrations, and repository implementations for
+exactly the data groups Phase 2's own deliverable list names -- settings,
+role profiles, events, and audit records. §4.4 lists many more data groups
+(provider installations, discovered models, workflow templates/runs,
+worktree allocations, quality-gate results, review findings, CI/CD records,
+approvals, policy decisions, usage estimates, updater state); those get
+their own migration once their owning phase's crate has real logic to back
+them, not schema'd speculatively now against a design those phases haven't
+made yet -- the same scope discipline Phase 1 applied to every placeholder
+crate, applied here to storage too.
+
+Concretely, new in Phase 2:
+
+- `nacc-domain`: `RoleKind` (the 18-role catalog from the Phase 0 plan's
+  "locked GUI requirement" addendum, plus `Custom(String)` for
+  user-defined roles) and `RoleProfile` (the four independently settable
+  Role Matrix switches -- role, model, thinking, reasoning effort -- plus
+  a permission profile), and four new strong IDs: `NodeRunId`, `AttemptId`,
+  `EventId`, `AuditEventId`.
+- `nacc-events`: `Event` (the closed, normalized event vocabulary from
+  master plan §8.2 -- 20 variants, deliberately no `Other(String)` escape
+  hatch) and `AuditRecord` (the audit-trail shape §22 requires: actor,
+  action, requested vs. actual provider/model, effective
+  reasoning/permission, command and redacted arguments, working
+  directory). Pure domain types, no SQLite dependency.
+- `nacc-storage`: `Database::open`/`open_in_memory`, real migrations
+  (`migrations.rs`), and repository methods (`settings.rs`,
+  `role_profiles.rs`, `events.rs`, `audit.rs`) -- every method that touches
+  the connection is `async` and runs the actual (synchronous) SQLite call
+  inside `tokio::task::spawn_blocking`, so a query never blocks the async
+  runtime. `Database::backup_to`/`restore_from` use SQLite's own
+  `VACUUM INTO` rather than a raw file copy, specifically because a raw
+  copy of an open WAL-mode database can capture an inconsistent snapshot.
+- `src-tauri`: `AppState` now holds a real `nacc_storage::Database`,
+  opened once in `.setup()` at the real app-data directory.
+  `get_app_diagnostics` (`diagnostics.rs`) became `async` and does a real
+  storage round trip on every call -- writes one `AuditRecord`, reads back
+  how many this session has recorded, and reports it alongside the applied
+  schema version. Not `tauri::async_runtime::block_on`-ed from `.setup()`:
+  see that function's own doc comment for why that specific pattern
+  deadlocks/panics (`.setup()` already runs inside Tauri's own Tokio
+  runtime) and why the round trip lives entirely inside one already-async
+  command instead.
+
+**rusqlite over sqlx**, verified via crates.io on 2026-08-30: rusqlite
+0.40.2 (31.5M recent downloads, updated 2026-08-08) is a thin, synchronous
+binding over the same `libsqlite3-sys` C bindings sqlx itself uses, with no
+compile-time query-cache/build-time coupling -- sqlx's headline feature
+needs a live database or a committed `.sqlx/` offline cache at build time,
+exactly the kind of exotic build-time surface this workspace's own CI
+history (`STATUS_ENTRYPOINT_NOT_FOUND`, the workspace-target-path incident
+below) says to avoid. NACC is a single-process, single-user desktop app
+with no concurrent-multi-client story sqlx's async pool is built for, so
+synchronous rusqlite calls wrapped in `spawn_blocking` are the simpler,
+equally-correct fit. `rusqlite_migration` (2.6.0, 2.2M recent downloads)
+tracks the applied version in SQLite's own `user_version` pragma and
+applies each pending migration transactionally -- matching master plan
+§4.4's wording ("embedded, versioned, transactional") exactly. See the
+root `Cargo.toml`'s own comment on these dependencies for the full
+reasoning.
+
+Every enum-typed SQL column (`ProviderId`, `ThinkingMode`, `ReasoningLevel`,
+`PermissionProfile`, `RoleKind`, `EventType`, ...) is stored as that type's
+own `serde_json` encoding rather than a hand-written second `Display`/
+`FromStr` mapping -- one source of truth for a type's wire *and* storage
+representation, instead of two that could silently drift apart. See
+`nacc-storage/src/migrations.rs`'s own doc comment.
 
 ## Toolchain, pinned and verified (not assumed)
 
@@ -31,19 +102,24 @@ Cargo.toml                 # workspace root, resolver = "2", 21 crates + src-tau
 rust-toolchain.toml        # pinned 1.96.0
 src-tauri/                 # Tauri 2 application shell (composition root)
 crates/
-  nacc-domain               # REAL: strong IDs, ReasoningLevel/ThinkingMode/PermissionProfile
+  nacc-domain               # REAL: strong IDs, ReasoningLevel/ThinkingMode/PermissionProfile,
+                             # RoleKind/RoleProfile (Phase 2)
   nacc-provider-core         # REAL: AgentProvider trait, capability/event types (master plan S8)
   nacc-provider-{claude,codex,antigravity,copilot,opencode}
                              # REAL trait impl, all methods return "not yet implemented" --
                              # proves the contract is satisfiable; CLI invocation is Phase 5/8
   nacc-observability         # REAL: init_tracing(), correlation-span helper
-  nacc-storage, nacc-events, nacc-orchestrator, nacc-process, nacc-runtime,
-  nacc-worktree, nacc-git, nacc-github, nacc-policy, nacc-quality,
-  nacc-review, nacc-secrets, nacc-updater
-                             # Boundary + typed error only. Each crate's own doc comment
-                             # names its target phase (2, 3, 7, 9, 10, 11, or 12).
+  nacc-events                # REAL (Phase 2): Event, AuditRecord -- normalized vocabulary and
+                             # audit-trail shape, no SQLite dependency
+  nacc-storage               # REAL (Phase 2): SQLite schema, migrations, settings/role-profile/
+                             # event/audit repositories
+  nacc-orchestrator, nacc-process, nacc-runtime, nacc-worktree, nacc-git,
+  nacc-github, nacc-policy, nacc-quality, nacc-review, nacc-secrets,
+  nacc-updater               # Boundary + typed error only. Each crate's own doc comment
+                             # names its target phase (3, 7, 9, 10, 11, or 12).
 src/                        # React + TypeScript + Vite frontend
-  App.tsx                    # the one real IPC round trip (see below)
+  App.tsx                    # the one real IPC round trip, now a real storage round trip too
+                             # (see below)
   bindings.ts                # GENERATED, gitignored -- see "Typed IPC" below
 ```
 
@@ -180,9 +256,13 @@ later-phase manual verification step.
 
 ## What is explicitly not here yet
 
-No SQLite, no migrations, no workflow engine, no policy enforcement, no
-Windows Job Objects, no real Git/GitHub operations, no real provider CLI
-invocation, no GUI beyond the one diagnostics screen. Every one of those
-has a crate boundary and a named target phase already (see the workspace
-structure table above) — Phase 1's job was the foundation those land on,
-not the features themselves.
+No durable workflow engine (DAG templates, checkpointed runs -- that is
+Phase 7, not Phase 2, despite `workflow_runs`/`node_runs`/`node_attempts`
+tables already existing in the schema), no policy enforcement, no Windows
+Job Objects, no real Git/GitHub operations, no real provider CLI
+invocation, no GUI beyond the one diagnostics screen -- and no Role Matrix
+*GUI* yet either, even though `RoleProfile` now has real, tested storage
+underneath it (Phase 6). Every one of those has a crate boundary and a
+named target phase already (see the workspace structure table above) —
+Phase 1 built the foundation those land on, Phase 2 built the durable
+domain and storage layer, not the features themselves.
