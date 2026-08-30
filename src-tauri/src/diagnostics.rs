@@ -49,8 +49,6 @@ pub fn get_app_diagnostics(state: State<'_, AppState>) -> AppDiagnostics {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn diagnostics_reports_a_real_workspace_msrv_string() {
         // env! resolves at compile time; this just guards against the

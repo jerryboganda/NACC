@@ -9,6 +9,7 @@
 
 mod diagnostics;
 
+use tauri::Manager;
 use tauri_specta::{collect_commands, Builder};
 
 /// Application-managed state. Phase 1 holds only what the diagnostics
