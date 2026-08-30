@@ -4,9 +4,9 @@
 #
 # Windows-only by directive (see docs/adr/0001-foundation-selection.md).
 # Step order matters: Rust steps run BEFORE the frontend build, because
-# `cargo test` regenerates the gitignored ../src/bindings.ts that
-# the frontend build type-checks against (see
-# src-tauri/tests/export_bindings.rs).
+# `cargo run -- --export-bindings` regenerates the gitignored
+# ../src/bindings.ts that the frontend build type-checks against (see
+# src-tauri/src/main.rs's --export-bindings flag).
 name: CI
 
 on:
@@ -56,34 +56,16 @@ jobs:
       - name: cargo clippy (workspace, deny warnings)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: cargo test (workspace) -- also regenerates src/bindings.ts
+      - name: cargo test (workspace)
         run: cargo test --workspace --all-features
 
-      - name: Diagnose export_bindings.exe if the test step failed
-        if: failure()
-        run: |
-          $exe = Get-ChildItem -Path "target/debug/deps" -Filter "export_bindings-*.exe" -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if ($null -eq $exe) {
-            Write-Host "No export_bindings-*.exe found under target/debug/deps"
-          } else {
-            Write-Host "Inspecting: $($exe.FullName)"
-            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-            $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-            $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter "dumpbin.exe" -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -like "*Hostx64\x64*" } | Select-Object -First 1
-            if ($dumpbin) {
-              Write-Host "--- dumpbin /dependents ---"
-              & $dumpbin.FullName /dependents $exe.FullName
-            } else {
-              Write-Host "dumpbin.exe not found"
-            }
-          }
+      - name: Generate src/bindings.ts (cargo run -- --export-bindings)
+        run: cargo run -p nacc-app -- --export-bindings
 
       - name: Confirm bindings.ts was regenerated
         run: |
           if (-not (Test-Path "src/bindings.ts")) {
-            Write-Error "src/bindings.ts was not produced by cargo test -- export_bindings.rs did not run or failed silently"
+            Write-Error "src/bindings.ts was not produced by --export-bindings"
             exit 1
           }
           Write-Host "src/bindings.ts present, $((Get-Item src/bindings.ts).Length) bytes"

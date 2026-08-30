@@ -28,10 +28,10 @@ pub struct AppState {
 
 /// Builds the tauri-specta `Builder` used both to generate TypeScript
 /// bindings and to construct the app's `invoke_handler`. Factored out of
-/// `run()` so `tests/export_bindings.rs` can call the exact same
+/// `run()` so `main()`'s `--export-bindings` flag can call the exact same
 /// construction the running app uses to (re)generate the gitignored
-/// `../src/bindings.ts` the frontend imports -- see that test's own doc
-/// comment for why the file is generated-only rather than committed.
+/// `../src/bindings.ts` the frontend imports -- see `main.rs` for why
+/// that flag exists instead of a `tests/` integration test.
 pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![diagnostics::get_app_diagnostics])
 }

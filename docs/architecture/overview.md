@@ -68,17 +68,30 @@ Rust command (#[tauri::command] #[specta::specta])
 ```
 
 **`src/bindings.ts` is generated, not committed** (`.gitignore`). It is
-produced by `cargo test -p nacc-app` (specifically
-`src-tauri/tests/export_bindings.rs`, which calls the exact same
-`specta_builder()` construction the running app uses) and consumed by the
-frontend's `tsc`/`vite build` step immediately after. This is deliberate,
-not an oversight: hand-transcribing tauri-specta's ~1000-line codegen
-template accurately enough to commit a byte-correct copy was assessed as
-higher-risk than making the frontend build depend on a fresh Rust-generated
-file — see this session's Phase 1 work log for the specific mismatch this
-avoided (`specta`'s built-in `SystemTime` mapping does not match a custom
+produced by `cargo run -p nacc-app -- --export-bindings` (see
+`src-tauri/src/main.rs`, which calls the exact same `specta_builder()`
+construction the running app itself uses) and consumed by the frontend's
+`tsc`/`vite build` step immediately after. Hand-transcribing tauri-specta's
+~1000-line codegen template accurately enough to commit a byte-correct copy
+was assessed and rejected as higher-risk than regenerating fresh — see this
+session's Phase 1 work log for the specific mismatch this avoided
+(`specta`'s built-in `SystemTime` mapping does not match a custom
 `serde(with)` wire format, which is exactly the kind of silent drift a
 committed, hand-maintained bindings file invites).
+
+Generation originally ran as a `tests/export_bindings.rs` integration
+test invoked via `cargo test`, which is the more common pattern in the
+tauri-specta ecosystem. That integration-test binary consistently crashed
+on this workspace's CI runner with `STATUS_ENTRYPOINT_NOT_FOUND` before
+reaching any of its own code, while every *other* test binary in the same
+job (the lib's own unit tests, the main binary's own empty test harness)
+ran cleanly — `dumpbin /dependents` showed a completely ordinary system-DLL
+import table, ruling out an obvious missing-DLL cause. Rather than keep
+chasing an unexplained low-level Windows loader failure specific to
+standalone integration-test crates, generation was moved into the main
+`nacc-app` binary itself via a `--export-bindings` flag that exits before
+starting the actual Tauri app (no window, no webview) — reusing a binary
+target already proven to run cleanly on the same runner.
 
 **Known limitation, stated plainly**: on a machine where the Rust side
 cannot currently link (see the Phase 0 foundation audit — no Windows SDK
@@ -136,9 +149,9 @@ Two workflows, deliberately distinct:
   for provenance; not part of ongoing CI.
 - `.github/workflows/ci.yml` — ongoing CI for NACC's own code. Runs on
   every push to `main`: `cargo fmt --check` → `cargo clippy -D warnings`
-  (workspace-wide) → `cargo test --workspace` (which also regenerates
-  `src/bindings.ts`) → frontend build/lint/typecheck → Vitest → a real
-  `tauri build` producing a genuinely signed NSIS installer, uploaded as an
+  (workspace-wide) → `cargo test --workspace` → `cargo run -- --export-bindings`
+  (regenerates `src/bindings.ts`) → frontend build/lint/typecheck → Vitest →
+  a real `tauri build` producing a genuinely signed NSIS installer, uploaded as an
   artifact. Windows-only, per standing directive. Rust steps run before
   frontend steps deliberately — see "Typed IPC" above for why the ordering
   is load-bearing, not incidental.
