@@ -1,9 +1,15 @@
-# Pinned ahead of Tauri 2.12's declared MSRV bump (1.77.2 -> 1.90, PR #13221,
-# merged to the tauri `dev` branch 2026-07-02) so that upgrade is a non-event.
-# See docs/adr/0001-foundation-selection.md and the Phase 0 audit for the
-# evidence trail. This exact version was already verified building the
-# workspace's Windows CI (see .github/workflows/foundation-audit.yml).
+# Pinned to 1.96.0 -- higher than either of the two independent floors that
+# actually constrain this workspace:
+#   1. Tauri 2.12's declared MSRV bump (1.77.2 -> 1.90, PR #13221).
+#   2. specta 2.0.0-rc.25's use of std::fmt::from_fn (the
+#      `debug_closure_helpers` feature), which only stabilized in Rust
+#      1.93.0 -- discovered the hard way: 1.90.0 failed to compile
+#      specta's own source with `error[E0658]: use of unstable library
+#      feature` in CI, since this is a real rustc requirement, not a
+#      clippy-only lint. See docs/architecture/overview.md.
+# 1.96.0 matches the version already installed and verified on the
+# primary development machine (see the Phase 0 foundation audit).
 [toolchain]
-channel = "1.90.0"
+channel = "1.96.0"
 components = ["rustfmt", "clippy"]
 targets = ["x86_64-pc-windows-msvc"]

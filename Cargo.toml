@@ -28,7 +28,11 @@ members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.90"
+# The real floor, driven by specta 2.0.0-rc.25's use of std::fmt::from_fn
+# (stable since 1.93.0) -- not just Tauri 2.12's own 1.90 MSRV bump. See
+# rust-toolchain.toml's comment for the full chain of reasoning; this is
+# also what `get_app_diagnostics` reports via CARGO_PKG_RUST_VERSION.
+rust-version = "1.93"
 license = "MIT"
 publish = false
 

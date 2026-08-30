@@ -17,7 +17,7 @@ workflow engine — those are later phases, listed per-crate below.
 
 | | Version | Verified |
 |---|---|---|
-| Rust | 1.90.0 (`rust-toolchain.toml`) | Ahead of Tauri 2.12's declared MSRV bump (1.77.2 → 1.90); this workspace's own CI has already built successfully at this pin (Phase 0's `foundation-audit.yml` run) |
+| Rust | 1.96.0 (`rust-toolchain.toml`) | Ahead of two independent floors: Tauri 2.12's declared MSRV bump (1.77.2 → 1.90) and specta 2.0.0-rc.25's use of `std::fmt::from_fn`, stable only since Rust 1.93.0. The lower bound (1.90.0) was tried first and genuinely failed CI with `error[E0658]: use of unstable library feature` inside specta's own source — a real rustc requirement, not a clippy-only lint, caught by this workspace's own CI run rather than assumed. |
 | `tauri` | 2.11.5 | crates.io, 2026-08-30 |
 | `tauri-build` | 2.6.3 | crates.io, 2026-08-30 — default features (`config-json`) required since `tauri.conf.json` is JSON, not JSON5/TOML |
 | `tauri-plugin-updater` | 2.10.1 | crates.io, 2026-08-30 |
@@ -28,7 +28,7 @@ workflow engine — those are later phases, listed per-crate below.
 
 ```
 Cargo.toml                 # workspace root, resolver = "2", 21 crates + src-tauri
-rust-toolchain.toml        # pinned 1.90.0
+rust-toolchain.toml        # pinned 1.96.0
 src-tauri/                 # Tauri 2 application shell (composition root)
 crates/
   nacc-domain               # REAL: strong IDs, ReasoningLevel/ThinkingMode/PermissionProfile

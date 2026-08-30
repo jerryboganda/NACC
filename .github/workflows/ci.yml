@@ -34,7 +34,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust (matches rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@1.90.0
+        uses: dtolnay/rust-toolchain@1.96.0
         with:
           targets: x86_64-pc-windows-msvc
           components: clippy, rustfmt
