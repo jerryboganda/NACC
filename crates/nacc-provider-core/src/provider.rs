@@ -13,7 +13,9 @@ use nacc_domain::{
     ModelId, PermissionProfile, ProviderAccountId, ProviderId, ReasoningLevel, ThinkingMode,
 };
 
-use crate::capability::{AuthProbe, CapabilitySnapshot, InstallationProbe, ModelDescriptor, RuntimeLocation};
+use crate::capability::{
+    AuthProbe, CapabilitySnapshot, InstallationProbe, ModelDescriptor, RuntimeLocation,
+};
 use crate::error::Result;
 use crate::events::EventSink;
 
@@ -188,23 +190,46 @@ mod tests {
             "Fake Provider (test double)"
         }
         async fn probe_installation(&self, _runtime: &RuntimeProfile) -> Result<InstallationProbe> {
-            Ok(InstallationProbe { installed: true, executable_path: None, version: Some("0.0.0-fake".into()) })
+            Ok(InstallationProbe {
+                installed: true,
+                executable_path: None,
+                version: Some("0.0.0-fake".into()),
+            })
         }
         async fn probe_authentication(&self, _account: &AccountProfile) -> Result<AuthProbe> {
-            Ok(AuthProbe { authenticated: true, account_label: Some("fake-user".into()), detail: None })
+            Ok(AuthProbe {
+                authenticated: true,
+                account_label: Some("fake-user".into()),
+                detail: None,
+            })
         }
         async fn list_models(&self, _account: &AccountProfile) -> Result<Vec<ModelDescriptor>> {
             Ok(vec![])
         }
         async fn capabilities(&self, _context: &CapabilityContext) -> Result<CapabilitySnapshot> {
-            Err(ProviderError::Other("not implemented in test double".into()))
+            Err(ProviderError::Other(
+                "not implemented in test double".into(),
+            ))
         }
-        async fn validate_profile(&self, _profile: &ResolvedAgentProfile) -> Result<ProfileValidation> {
-            Ok(ProfileValidation { supported: true, issues: vec![] })
+        async fn validate_profile(
+            &self,
+            _profile: &ResolvedAgentProfile,
+        ) -> Result<ProfileValidation> {
+            Ok(ProfileValidation {
+                supported: true,
+                issues: vec![],
+            })
         }
-        async fn launch(&self, _request: LaunchRequest, sink: Box<dyn EventSink>) -> Result<AgentSessionHandle> {
+        async fn launch(
+            &self,
+            _request: LaunchRequest,
+            sink: Box<dyn EventSink>,
+        ) -> Result<AgentSessionHandle> {
             sink.emit(crate::events::ProviderEvent::SessionCompleted);
-            Ok(AgentSessionHandle { session_id: SessionId("fake-session".into()), provider: self.id() })
+            Ok(AgentSessionHandle {
+                session_id: SessionId("fake-session".into()),
+                provider: self.id(),
+            })
         }
         async fn send_input(&self, _session: &SessionId, _input: AgentInput) -> Result<()> {
             Ok(())
@@ -212,8 +237,14 @@ mod tests {
         async fn cancel(&self, _session: &SessionId, _mode: CancellationMode) -> Result<()> {
             Ok(())
         }
-        async fn resume(&self, _request: ResumeRequest, _sink: Box<dyn EventSink>) -> Result<AgentSessionHandle> {
-            Err(ProviderError::UnsupportedSetting { detail: "resume not implemented in test double".into() })
+        async fn resume(
+            &self,
+            _request: ResumeRequest,
+            _sink: Box<dyn EventSink>,
+        ) -> Result<AgentSessionHandle> {
+            Err(ProviderError::UnsupportedSetting {
+                detail: "resume not implemented in test double".into(),
+            })
         }
         async fn collect_usage(&self, _session: &SessionId) -> Result<Option<UsageObservation>> {
             Ok(None)

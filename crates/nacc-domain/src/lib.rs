@@ -93,10 +93,22 @@ macro_rules! define_id {
     };
 }
 
-define_id!(ProjectId, "Identifies a NACC-managed project (a bound repository plus its NACC-owned configuration).");
-define_id!(WorkflowRunId, "Identifies one execution of a workflow template.");
-define_id!(RoleProfileId, "Identifies one configured Role Matrix row (master plan S11).");
-define_id!(ProviderAccountId, "Identifies one configured account profile for a provider (a provider may have several).");
+define_id!(
+    ProjectId,
+    "Identifies a NACC-managed project (a bound repository plus its NACC-owned configuration)."
+);
+define_id!(
+    WorkflowRunId,
+    "Identifies one execution of a workflow template."
+);
+define_id!(
+    RoleProfileId,
+    "Identifies one configured Role Matrix row (master plan S11)."
+);
+define_id!(
+    ProviderAccountId,
+    "Identifies one configured account profile for a provider (a provider may have several)."
+);
 
 /// A provider identifier. Unlike the UUID-backed IDs above, this is a
 /// small, stable, closed enumeration -- new providers are added to NACC's

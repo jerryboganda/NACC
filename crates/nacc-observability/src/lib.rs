@@ -57,7 +57,10 @@ pub fn init_tracing(log_dir: &Path, dev_mode: bool) -> Result<WorkerGuard> {
         .or_else(|_| EnvFilter::try_new(if dev_mode { "debug" } else { "info" }))
         .expect("the fallback EnvFilter directive is a constant, always-valid string");
 
-    let file_layer = fmt::layer().json().with_writer(non_blocking).with_ansi(false);
+    let file_layer = fmt::layer()
+        .json()
+        .with_writer(non_blocking)
+        .with_ansi(false);
 
     let console_layer = fmt::layer().with_ansi(dev_mode).with_target(dev_mode);
 
@@ -89,10 +92,12 @@ mod tests {
 
     #[test]
     fn init_tracing_creates_the_log_directory_and_returns_a_live_guard() {
-        let dir = std::env::temp_dir().join(format!("nacc-observability-test-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("nacc-observability-test-{}", uuid::Uuid::new_v4()));
         assert!(!dir.exists());
 
-        let guard = init_tracing(&dir, true).expect("init_tracing should succeed on a fresh temp dir");
+        let guard =
+            init_tracing(&dir, true).expect("init_tracing should succeed on a fresh temp dir");
         assert!(dir.exists(), "log directory must be created");
 
         tracing::info!(target: "nacc_observability::tests", "smoke test event");

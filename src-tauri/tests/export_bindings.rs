@@ -13,11 +13,14 @@ fn export_typescript_bindings() {
     let builder = nacc_app_lib::specta_builder();
 
     builder
-        .export(specta_typescript::Typescript::default(), "../src/bindings.ts")
+        .export(
+            specta_typescript::Typescript::default(),
+            "../src/bindings.ts",
+        )
         .expect("exporting TypeScript bindings should succeed");
 
-    let generated =
-        std::fs::read_to_string("../src/bindings.ts").expect("bindings.ts should exist immediately after export");
+    let generated = std::fs::read_to_string("../src/bindings.ts")
+        .expect("bindings.ts should exist immediately after export");
 
     assert!(
         generated.contains("get_app_diagnostics"),

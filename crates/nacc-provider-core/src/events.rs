@@ -130,6 +130,8 @@ mod tests {
         // edit adds a second field this call site must be updated,
         // forcing a deliberate decision rather than a silent scope-creep
         // into carrying hidden chain-of-thought (master plan S18).
-        let _ = ProviderEvent::ReasoningStatus { status: "thinking".into() };
+        let _ = ProviderEvent::ReasoningStatus {
+            status: "thinking".into(),
+        };
     }
 }

@@ -146,6 +146,9 @@ mod tests {
         let back: CapabilitySnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(back.provider, ProviderId::Copilot);
         assert_eq!(back.acp_transport, AcpTransport::Native);
-        assert!(back.captured_at_millis > 0, "now_millis() must produce a real, nonzero timestamp");
+        assert!(
+            back.captured_at_millis > 0,
+            "now_millis() must produce a real, nonzero timestamp"
+        );
     }
 }

@@ -15,8 +15,8 @@ use nacc_domain::ProviderId;
 use nacc_provider_core::{
     AccountProfile, AgentInput, AgentProvider, AgentSessionHandle, AuthProbe, CancellationMode,
     CapabilityContext, CapabilitySnapshot, EventSink, InstallationProbe, LaunchRequest,
-    ModelDescriptor, ProfileValidation, ProviderError, ResolvedAgentProfile, Result,
-    ResumeRequest, RuntimeProfile, SessionId, UsageObservation,
+    ModelDescriptor, ProfileValidation, ProviderError, ResolvedAgentProfile, Result, ResumeRequest,
+    RuntimeProfile, SessionId, UsageObservation,
 };
 
 #[derive(Default)]
@@ -58,7 +58,11 @@ impl AgentProvider for CodexProvider {
         Err(not_yet_implemented("validate_profile"))
     }
 
-    async fn launch(&self, _request: LaunchRequest, _sink: Box<dyn EventSink>) -> Result<AgentSessionHandle> {
+    async fn launch(
+        &self,
+        _request: LaunchRequest,
+        _sink: Box<dyn EventSink>,
+    ) -> Result<AgentSessionHandle> {
         Err(not_yet_implemented("launch"))
     }
 
@@ -70,7 +74,11 @@ impl AgentProvider for CodexProvider {
         Err(not_yet_implemented("cancel"))
     }
 
-    async fn resume(&self, _request: ResumeRequest, _sink: Box<dyn EventSink>) -> Result<AgentSessionHandle> {
+    async fn resume(
+        &self,
+        _request: ResumeRequest,
+        _sink: Box<dyn EventSink>,
+    ) -> Result<AgentSessionHandle> {
         Err(not_yet_implemented("resume"))
     }
 
