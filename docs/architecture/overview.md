@@ -156,6 +156,22 @@ Two workflows, deliberately distinct:
   frontend steps deliberately — see "Typed IPC" above for why the ordering
   is load-bearing, not incidental.
 
+  **Verified end-to-end, not just green-checkmarked**: run
+  [33325051099](https://github.com/jerryboganda/NACC/actions/runs/33325051099)
+  (SHA `4f2a148`) passed all 20 steps, but the first pass through the full
+  pipeline surfaced a real bug the checkmark alone hid — the installer-locate
+  and installer-upload steps looked for the NSIS bundle at
+  `src-tauri/target/release/bundle`, which is where upstream AgentPanel's
+  standalone single-crate layout puts it, but NACC is a Cargo *workspace*, so
+  the real output is at the workspace-root `target/release/bundle`. Because
+  the upload step used `if-no-files-found: warn`, the step stayed green while
+  uploading nothing — only caught by querying
+  `gh api repos/jerryboganda/NACC/actions/runs/<id>/artifacts` after the
+  "successful" run and finding `total_count: 0`. Fixed by correcting both
+  paths and changing `if-no-files-found` to `error` so this class of bug
+  fails the build instead of hiding inside a passing step. See ci.yml's own
+  header comment for the full account.
+
 Not automated: `master plan §18`'s "Tauri development smoke launch" (i.e.
 running `tauri dev` interactively) has no practical CI equivalent — a
 production `tauri build` is stricter in most respects and is what CI

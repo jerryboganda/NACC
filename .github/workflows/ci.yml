@@ -7,6 +7,18 @@
 # `cargo run -- --export-bindings` regenerates the gitignored
 # ../src/bindings.ts that the frontend build type-checks against (see
 # src-tauri/src/main.rs's --export-bindings flag).
+#
+# Build output lands at the WORKSPACE ROOT's target/release/bundle, not
+# src-tauri/target/release/bundle -- this repo is a Cargo workspace (root
+# Cargo.toml, resolver = "2"), unlike upstream AgentPanel's standalone
+# single-crate layout that foundation-audit.yml correctly builds against
+# a src-tauri/target path. Confirmed the hard way: an earlier version of
+# this file looked in src-tauri/target/release/bundle, found nothing, and
+# `if-no-files-found: warn` let the step report success while silently
+# uploading no installer at all -- caught by actually downloading the
+# artifact list via `gh api .../artifacts` after a "green" run, not by
+# trusting the step's own checkmark. `if-no-files-found` is now `error`
+# so this class of bug fails loudly instead of silently.
 name: CI
 
 on:
@@ -93,7 +105,7 @@ jobs:
 
       - name: Locate build outputs
         run: |
-          Get-ChildItem -Recurse -Path "src-tauri/target/release/bundle" -ErrorAction SilentlyContinue |
+          Get-ChildItem -Recurse -Path "target/release/bundle" -ErrorAction SilentlyContinue |
             Select-Object FullName, Length | Format-Table -AutoSize
 
       - name: Upload NSIS installer
@@ -102,7 +114,7 @@ jobs:
         with:
           name: nacc-windows-installer-${{ github.sha }}
           path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/*.exe.sig
-          if-no-files-found: warn
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/nsis/*.exe.sig
+          if-no-files-found: error
           retention-days: 14
