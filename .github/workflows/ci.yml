@@ -59,6 +59,27 @@ jobs:
       - name: cargo test (workspace) -- also regenerates src/bindings.ts
         run: cargo test --workspace --all-features
 
+      - name: Diagnose export_bindings.exe if the test step failed
+        if: failure()
+        run: |
+          $exe = Get-ChildItem -Path "target/debug/deps" -Filter "export_bindings-*.exe" -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($null -eq $exe) {
+            Write-Host "No export_bindings-*.exe found under target/debug/deps"
+          } else {
+            Write-Host "Inspecting: $($exe.FullName)"
+            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter "dumpbin.exe" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -like "*Hostx64\x64*" } | Select-Object -First 1
+            if ($dumpbin) {
+              Write-Host "--- dumpbin /dependents ---"
+              & $dumpbin.FullName /dependents $exe.FullName
+            } else {
+              Write-Host "dumpbin.exe not found"
+            }
+          }
+
       - name: Confirm bindings.ts was regenerated
         run: |
           if (-not (Test-Path "src/bindings.ts")) {
