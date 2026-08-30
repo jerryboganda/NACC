@@ -1,0 +1,47 @@
+# Rust
+/target/
+**/target/
+Cargo.lock.bak
+*.pdb
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Tauri
+/src-tauri/target/
+/gen/
+
+# Environment / secrets — never committed
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/icons/*.key
+
+# Provider CLI credential/session directories — must never enter a public repo
+.claude/
+.codex/
+.copilot/
+.gemini/
+.opencode/
+.antigravity/
+**/*.credentials.json
+**/auth.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+*.log
+logs/
+
+# NACC local runtime state
+.nacc-worktrees/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
