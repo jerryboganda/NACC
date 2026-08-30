@@ -30,10 +30,22 @@ pub struct AppState {
 /// bindings and to construct the app's `invoke_handler`. Factored out of
 /// `run()` so `main()`'s `--export-bindings` flag can call the exact same
 /// construction the running app uses to (re)generate the gitignored
-/// `../src/bindings.ts` the frontend imports -- see `main.rs` for why
-/// that flag exists instead of a `tests/` integration test.
+/// `src/bindings.ts` the frontend imports -- see `main.rs` for why that
+/// flag exists instead of a `tests/` integration test.
 pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![diagnostics::get_app_diagnostics])
+}
+
+/// Absolute path to `src/bindings.ts`, resolved from `CARGO_MANIFEST_DIR`
+/// (compile-time, always this crate's own directory) rather than a
+/// runtime-relative literal -- `cargo run` does not change the process's
+/// working directory to the target package's directory the way `cargo
+/// test` does, so a bare `"../src/bindings.ts"` resolves differently (and
+/// wrongly) depending on where the binary was launched from. Confirmed
+/// the hard way in CI: see `main.rs`'s `--export-bindings` handler, the
+/// other caller of this function.
+pub fn bindings_output_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/bindings.ts")
 }
 
 pub fn run() {
@@ -43,7 +55,7 @@ pub fn run() {
     builder
         .export(
             specta_typescript::Typescript::default(),
-            "../src/bindings.ts",
+            bindings_output_path(),
         )
         .expect("failed to export TypeScript bindings");
 

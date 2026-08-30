@@ -1,10 +1,10 @@
 // Prevents an additional console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-/// `--export-bindings`: generate `../src/bindings.ts` and exit, without
-/// starting the actual Tauri app (no window, no webview). Used by CI
-/// (`.github/workflows/ci.yml`) to regenerate the gitignored bindings file
-/// before the frontend build consumes it.
+/// `--export-bindings`: generate `src/bindings.ts` (workspace root) and
+/// exit, without starting the actual Tauri app (no window, no webview).
+/// Used by CI (`.github/workflows/ci.yml`) to regenerate the gitignored
+/// bindings file before the frontend build consumes it.
 ///
 /// A separate `tests/export_bindings.rs` integration test originally did
 /// this instead. That test binary consistently crashed on the CI runner
@@ -20,13 +20,11 @@
 /// proven to run cleanly.
 fn main() {
     if std::env::args().any(|arg| arg == "--export-bindings") {
+        let out_path = nacc_app_lib::bindings_output_path();
         nacc_app_lib::specta_builder()
-            .export(
-                specta_typescript::Typescript::default(),
-                "../src/bindings.ts",
-            )
+            .export(specta_typescript::Typescript::default(), &out_path)
             .expect("failed to export TypeScript bindings");
-        println!("wrote ../src/bindings.ts");
+        println!("wrote {}", out_path.display());
         return;
     }
 
