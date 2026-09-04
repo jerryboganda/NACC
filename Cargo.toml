@@ -38,12 +38,10 @@ publish = false
 
 # Versions verified directly against crates.io on 2026-08-30 (see
 # docs/adr/0001-foundation-selection.md and docs/audits/foundation-audit.md
-# for the verification method this workspace follows). Only dependencies
-# actually used by a Phase 1/2 crate are pinned here; crates needed by later
-# phases (portable-pty, notify, reqwest, keyring, secrecy, zeroize, ...) are
-# deliberately NOT pre-declared -- they get verified fresh, at the point
-# they are actually adopted, per the master plan's "discover/validate
-# dynamically, don't hard-code" principle (S2.7).
+# for the verification method this workspace follows). Dependencies used
+# by a later phase are added only when that phase starts and after their
+# current contract has been checked; Phase 3 adds portable-pty/win32job
+# here after that verification rather than predeclaring them speculatively.
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -77,6 +75,16 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 # matching master plan S4.4's wording exactly ("embedded, versioned,
 # transactional where SQLite permits").
 rusqlite_migration = "2.6.0"
+
+# Phase 3 process/terminal core. portable-pty 0.9.0 is the current stable
+# cross-platform PTY API (ConPTY on Windows); win32job 2.0.3 provides a
+# narrow safe wrapper around Windows Job Objects. We pin windows to the
+# latest 0.61 patch because win32job 2.0.3 itself depends on windows ^0.61,
+# keeping a single Windows binding version while exposing TerminateJobObject
+# for explicit, observable cancellation in addition to kill-on-close.
+portable-pty = "0.9.0"
+win32job = "2.0.3"
+windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_System_JobObjects"] }
 
 tauri = "2.11.5"
 tauri-build = "2.6.3" # default features include config-json, required since tauri.conf.json is JSON
