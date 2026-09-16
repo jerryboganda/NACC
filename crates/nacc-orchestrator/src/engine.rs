@@ -73,11 +73,9 @@ impl RetryPolicy {
     /// Exponential backoff, `base * 2^(failed_attempts - 1)`, capped.
     pub fn backoff_after(&self, failed_attempt: u32) -> Duration {
         let exponent = failed_attempt.saturating_sub(1).min(16);
-        let scaled = self
-            .base_backoff
+        self.base_backoff
             .saturating_mul(1u32 << exponent)
-            .min(self.max_backoff);
-        scaled
+            .min(self.max_backoff)
     }
 }
 
