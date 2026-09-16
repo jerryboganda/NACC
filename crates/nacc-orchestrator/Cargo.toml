@@ -9,5 +9,14 @@ publish.workspace = true
 
 [dependencies]
 nacc-domain = { workspace = true }
+# The engine persists every transition before it takes the next one, so a
+# crash is always discoverable from the database alone (master plan S14.1,
+# S16). Storage does not depend on the orchestrator, so this direction is
+# acyclic.
+nacc-storage = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
