@@ -375,14 +375,14 @@ mod tests {
     fn a_missing_node_row_is_blocked_not_silently_ready() {
         // Partial state (a crash between two writes) must not let a node run
         // without its dependency's output.
-        let nodes = vec![node("a", &[]), node("b", &["a"])];
+        let nodes = [node("a", &[]), node("b", &["a"])];
         let only_b = states(&[("b", NodeState::Pending)]);
         assert_eq!(readiness(&nodes[1], &only_b), Readiness::Blocked);
     }
 
     #[test]
     fn outcome_is_running_until_every_node_is_terminal() {
-        let nodes = vec![node("a", &[]), node("b", &["a"])];
+        let nodes = [node("a", &[]), node("b", &["a"])];
         let mid = states(&[("a", NodeState::Succeeded), ("b", NodeState::Running)]);
         assert_eq!(outcome(&nodes, &mid), Outcome::Running);
         let done = states(&[("a", NodeState::Succeeded), ("b", NodeState::Succeeded)]);

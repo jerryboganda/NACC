@@ -156,7 +156,7 @@ impl NodeExecutor for FakeExecutor {
             .push(request.clone());
 
         if let Some(gate) = &self.gate {
-            if self.gate_keys.iter().any(|key| *key == request.node_key)
+            if self.gate_keys.contains(&request.node_key)
                 && tokio::time::timeout(Duration::from_secs(10), gate.wait())
                     .await
                     .is_err()
