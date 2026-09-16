@@ -1,8 +1,12 @@
-# Architecture overview — Phase 1–2
+# Architecture overview — Phase 1–7
 
-**Status:** reflects what is actually implemented as of Phase 2 ("durable
-domain and storage"). Updated as later phases land real logic; do not treat
-any "Phase N scope" note below as already done.
+**Status:** reflects what is actually implemented through Phase 7's durable
+DAG engine (committed; the engine is not yet wired into the application —
+that is the next task). The authoritative, continuously updated per-crate
+state, verification method, and remaining-work plan live in
+[status.md](status.md) — read that file first when picking this repository
+up. This document records the architecture itself; do not treat any
+"Phase N scope" note below as already done.
 
 ## What Phase 1 delivers
 
@@ -124,6 +128,33 @@ genuine, non-expired, SHA256-digested installer artifact
 (`nacc-windows-installer-038a259...`, 4,224,969 bytes), not just a green
 step.
 
+## What Phases 3–7 deliver
+
+- **Phase 3 — process, runtime, worktrees.** `nacc-process` contains
+  process trees in Windows Job Objects (kill-on-close, so cancellation
+  leaves no orphans); `nacc-git` is a typed CLI wrapper (argument arrays,
+  never interpolated shell); `nacc-worktree` implements the lease
+  lifecycle (allocate, inspect, release, quarantine, reconcile);
+  `nacc-runtime` probes for installed tooling. PTY/ConPTY is deliberately
+  deferred — no adapter's non-interactive launch mode needs one, and
+  `CapabilitySnapshot.interactive_pty` reports the absence as a fact.
+- **Phase 4 — provider framework.** `nacc-provider-core`: the
+  `AgentProvider` trait, `CapabilitySnapshot`, health ranking, registry,
+  the normalized `ProviderEvent` vocabulary, and a 9-check contract suite
+  proven able to fail.
+- **Phase 5 — Claude and Codex adapters.** Real permission/reasoning
+  mapping, launch/resume argv, stream parsers, honest usage reporting —
+  but execution is fixture-only and **no adapter is wired outside its own
+  crate yet**; live CLI launch is not verified.
+- **Phase 7 — durable DAG engine.** `nacc-orchestrator`: a pure scheduler,
+  a concurrency governor, an injectable clock, the checkpoint-per-
+  transition `WorkflowEngine`, startup recovery that never auto-resumes,
+  and four built-in templates as real DAGs; `nacc-storage` migration V5
+  adds the workflow-state tables and repository. The engine is fully
+  tested against a real in-memory database, but nothing in `src-tauri`
+  can start a run yet — wiring it into the application is the next task
+  (status.md, Task D).
+
 ## Toolchain, pinned and verified (not assumed)
 
 | | Version | Verified |
@@ -142,21 +173,30 @@ Cargo.toml                 # workspace root, resolver = "2", 21 crates + src-tau
 rust-toolchain.toml        # pinned 1.96.0
 src-tauri/                 # Tauri 2 application shell (composition root)
 crates/
-  nacc-domain               # REAL: strong IDs, ReasoningLevel/ThinkingMode/PermissionProfile,
-                             # RoleKind/RoleProfile (Phase 2)
-  nacc-provider-core         # REAL: AgentProvider trait, capability/event types (master plan S8)
-  nacc-provider-{claude,codex,antigravity,copilot,opencode}
-                             # REAL trait impl, all methods return "not yet implemented" --
-                             # proves the contract is satisfiable; CLI invocation is Phase 5/8
-  nacc-observability         # REAL: init_tracing(), correlation-span helper
+  nacc-domain               # REAL: strong IDs, PermissionProfile (with rank/narrower_of),
+                             # RoleKind/RoleProfile, workflow state machine types (Phases 2, 7)
   nacc-events                # REAL (Phase 2): Event, AuditRecord -- normalized vocabulary and
                              # audit-trail shape, no SQLite dependency
-  nacc-storage               # REAL (Phase 2): SQLite schema, migrations, settings/role-profile/
-                             # event/audit repositories
-  nacc-orchestrator, nacc-process, nacc-runtime, nacc-worktree, nacc-git,
+  nacc-observability         # REAL: init_tracing(), correlation-span helper
+  nacc-storage               # REAL (Phases 2, 7): SQLite schema V1-V5, migrations,
+                             # settings/role-profile/event/audit/worktree/provider/workflow
+                             # repositories
+  nacc-process               # REAL (Phase 3): Windows Job Object process-tree containment
+  nacc-git                   # REAL (Phase 3): typed git CLI wrapper
+  nacc-worktree              # REAL (Phase 3): worktree lease lifecycle
+  nacc-runtime               # REAL (Phase 3, detection): tooling probes
+  nacc-provider-core         # REAL (Phase 4): AgentProvider trait, capability/event types,
+                             # registry, health, 9-check contract suite (master plan S8)
+  nacc-provider-claude       # REAL (Phase 5, fixture-only execution; not wired into the app)
+  nacc-provider-codex        # REAL (Phase 5, fixture-only execution; not wired into the app)
+  nacc-provider-antigravity  # STUB (Phase 8): blocked on a real headless interface
+  nacc-provider-copilot      # STUB (Phase 5/10): CLI contract recorded, not implemented
+  nacc-provider-opencode     # STUB (Phase 8): blocked on a working local binary
+  nacc-orchestrator          # REAL (Phase 7): durable DAG engine -- scheduler, governor,
+                             # clock, engine, recovery, templates; not yet wired into the app
   nacc-github, nacc-policy, nacc-quality, nacc-review, nacc-secrets,
   nacc-updater               # Boundary + typed error only. Each crate's own doc comment
-                             # names its target phase (3, 7, 9, 10, 11, or 12).
+                             # names its target phase (9, 10, 11, or 12).
 src/                        # React + TypeScript + Vite frontend
   App.tsx                    # the one real IPC round trip, now a real storage round trip too
                              # (see below)
@@ -296,13 +336,15 @@ later-phase manual verification step.
 
 ## What is explicitly not here yet
 
-No durable workflow engine (DAG templates, checkpointed runs -- that is
-Phase 7, not Phase 2, despite `workflow_runs`/`node_runs`/`node_attempts`
-tables already existing in the schema), no policy enforcement, no Windows
-Job Objects, no real Git/GitHub operations, no real provider CLI
-invocation, no GUI beyond the one diagnostics screen -- and no Role Matrix
-*GUI* yet either, even though `RoleProfile` now has real, tested storage
-underneath it (Phase 6). Every one of those has a crate boundary and a
-named target phase already (see the workspace structure table above) —
-Phase 1 built the foundation those land on, Phase 2 built the durable
-domain and storage layer, not the features themselves.
+The workflow engine exists and is fully tested, but **nothing can start a
+run yet**: `src-tauri` has no orchestrator handle and no commands beyond
+`get_app_diagnostics`, and the engine's `NodeExecutor`/`RoleRouting`
+boundaries have no production implementations — nothing launches a real
+provider CLI (the Phase 5 adapters are themselves not wired outside their
+crates). Per-node timeouts and attempt leases/heartbeats are also not
+built. Beyond that: no GUI beyond the one diagnostics screen (no Setup
+Wizard, no Role Matrix UI — even though `RoleProfile` has real, tested
+storage underneath it), no policy enforcement, no quality gates or review
+findings, no real GitHub/Copilot CI integration, no secrets storage, no
+updater logic. Every one of those has a crate boundary and a named target
+phase; [status.md](status.md) §9 is the ordered plan for landing them.

@@ -65,3 +65,7 @@ logs/
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal
+
+# Local scratch / tooling output -- never part of the repository
+.freebuff/
+output/
