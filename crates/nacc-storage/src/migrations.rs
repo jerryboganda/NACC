@@ -81,10 +81,37 @@ CREATE INDEX idx_audit_events_workflow_run_id ON audit_events(workflow_run_id);
 CREATE INDEX idx_audit_events_node_run_id ON audit_events(node_run_id);
 "#;
 
+/// Phase 3's worktree lease table (master plan S16's lifecycle: allocate,
+/// integrate, release, quarantine -- plus the owner process id startup
+/// reconciliation needs to tell "still running" from "orphaned by a
+/// crash"). Additive, like V2: an existing V1/V2 database upgrades in
+/// place, proven by the upgrade tests below.
+const V3_WORKTREE_LEASES: &str = r#"
+CREATE TABLE worktree_leases (
+    id                      TEXT PRIMARY KEY,
+    project_id              TEXT NOT NULL,
+    workflow_run_id         TEXT,
+    node_run_id             TEXT,
+    path                    TEXT NOT NULL,
+    branch                  TEXT NOT NULL,
+    base_commit             TEXT NOT NULL,
+    head_commit             TEXT,
+    state_json              TEXT NOT NULL,
+    owner_process_id        INTEGER,
+    quarantine_reason       TEXT,
+    created_at_millis       INTEGER NOT NULL,
+    updated_at_millis       INTEGER NOT NULL
+);
+
+CREATE INDEX idx_worktree_leases_project_id ON worktree_leases(project_id);
+CREATE INDEX idx_worktree_leases_workflow_run_id ON worktree_leases(workflow_run_id);
+"#;
+
 pub(crate) fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(V1_INITIAL_SCHEMA),
         M::up(V2_CORRELATION_INDEXES),
+        M::up(V3_WORKTREE_LEASES),
     ])
 }
 
@@ -110,8 +137,8 @@ mod tests {
         migrations().to_latest(&mut conn).unwrap();
         let version = migrations().current_version(&conn).unwrap();
         assert!(
-            matches!(version, SchemaVersion::Inside(n) if n.get() == 2),
-            "expected schema version 2, got {version:?}"
+            matches!(version, SchemaVersion::Inside(n) if n.get() == 3),
+            "expected schema version 3, got {version:?}"
         );
     }
 
@@ -142,11 +169,11 @@ mod tests {
         assert_eq!(value, "v");
         assert!(matches!(
             migrations().current_version(&conn).unwrap(),
-            SchemaVersion::Inside(n) if n.get() == 2
+            SchemaVersion::Inside(n) if n.get() == 3
         ));
 
         // And the V2 index must actually exist now -- proves V2 really
-        // ran, not just that current_version reports 2.
+        // ran, not just that current_version reports 3.
         let index_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_workflow_run_id'",
@@ -155,5 +182,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(index_count, 1);
+    }
+
+    #[test]
+    fn a_database_left_at_v2_upgrades_to_v3_keeping_its_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let up_to_v2 = Migrations::new(vec![
+            M::up(V1_INITIAL_SCHEMA),
+            M::up(V2_CORRELATION_INDEXES),
+        ]);
+        up_to_v2.to_latest(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at_millis) VALUES ('schema', 'v2', 7)",
+            [],
+        )
+        .unwrap();
+
+        migrations().to_latest(&mut conn).unwrap();
+
+        let value: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key = 'schema'", [], |r| {
+                r.get(0)
+            })
+            .expect("a row written at V2 must survive the V3 upgrade");
+        assert_eq!(value, "v2");
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'worktree_leases'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 1, "V3 must have created the lease table");
     }
 }

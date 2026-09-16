@@ -77,6 +77,17 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 # matching master plan S4.4's wording exactly ("embedded, versioned,
 # transactional where SQLite permits").
 rusqlite_migration = "2.6.0"
+# Phase 3's process containment. 0.61.2 is already in this workspace's
+# Cargo.lock (transitively, via Tauri's own Windows deps), so adopting the
+# exact same version avoids a second, differently-versioned Windows FFI
+# surface in the build graph. Only the namespaces `nacc-process` actually
+# calls are enabled -- Job Objects, threading (process handles), and the
+# `Foundation` types those signatures use.
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
 
 tauri = "2.11.5"
 tauri-build = "2.6.3" # default features include config-json, required since tauri.conf.json is JSON

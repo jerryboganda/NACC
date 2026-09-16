@@ -1,6 +1,6 @@
 [package]
 name = "nacc-worktree"
-description = "Git worktree lease lifecycle: allocation, drift detection, quarantine, safe cleanup (master plan S11, S16 -- Phase 3 scope for real lease management)."
+description = "Git worktree lease lifecycle: allocation, drift detection, quarantine-not-destroy cleanup, and startup reconciliation (master plan S11, S16, S17.9 -- Phase 3 scope)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,5 +9,15 @@ publish.workspace = true
 
 [dependencies]
 nacc-domain = { workspace = true }
-serde = { workspace = true }
+nacc-git = { workspace = true }
+nacc-storage = { workspace = true }
+# Crash-recovery reconciliation asks the OS whether a lease's recorded
+# owner process is still alive; that check lives in nacc-process (Phase 3's
+# containment module) rather than being reimplemented here.
+nacc-process = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+specta = { workspace = true }

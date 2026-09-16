@@ -1,31 +1,37 @@
-//! Windows Job Object process containment, ConPTY/PTY streaming, graceful and forced cancellation.
+//! Windows Job Object process containment, line-framed output streaming,
+//! and graceful/forced cancellation (master plan S10, S13.4, S16).
 //!
-//! Master plan S10, S13.4 -- Phase 3 scope for real process supervision. This crate establishes the workspace boundary and
-//! its typed error vocabulary in Phase 1; the logic listed above is
-//! deliberately not implemented yet, matching the phased roadmap (build
-//! prompt S17 / master plan S24) rather than front-loading work into a
-//! phase that is not scoped to deliver it.
+//! Phase 3 scope, second half. The first half (`nacc-git`, `nacc-runtime`)
+//! landed as pure subprocess wrapping with no exotic Win32 surface; this
+//! half is the platform-API half the phased plan deliberately separated
+//! out -- and it is verified by tests that spawn real, multi-level process
+//! trees and then ask the OS whether the descendants are really gone,
+//! rather than trusting that a cancel call returned `Ok`.
+//!
+//! What is here:
+//!
+//! - [`containment`] -- `JobObject` (`KILL_ON_JOB_CLOSE`), plus
+//!   [`containment::process_alive`] for crash-recovery reconciliation and
+//!   [`containment::terminate_process`] as the documented direct-child
+//!   fallback.
+//! - [`supervisor`] -- [`ProcessSupervisor::spawn`] /
+//!   [`SupervisedProcess::cancel`] / [`SupervisedProcess::wait`], with
+//!   [`LineSink`] delivery of every output line.
+//!
+//! What is deliberately **not** here yet: ConPTY/PTY support. The master
+//! plan's S9.1/S9.2 do not require a pseudo-console for either Claude Code
+//! or Codex (both have documented non-interactive modes with structured
+//! output, and those are the modes Phase 5 uses), so a pseudo-console would
+//! be speculative platform code with no consumer -- and `CapabilitySnapshot`
+//! already carries `interactive_pty` as a real, provider-reported fact, so
+//! its absence is visible rather than hidden. A PTY lands when a provider
+//! genuinely requires one, with its own tests.
 
-/// Placeholder error type for this crate. Real, specific variants are
-/// added as the crate gains real logic in its target phase; a single
-/// `Other` variant with a message is deliberately the only case for now
-/// so downstream code that already matches on this type does not need to
-/// change shape later, only grow more specific arms.
-#[derive(Debug, thiserror::Error)]
-pub enum ProcessError {
-    #[error("{0}")]
-    Other(String),
-}
+pub mod containment;
+pub mod supervisor;
 
-pub type Result<T> = std::result::Result<T, ProcessError>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn error_displays_its_message() {
-        let err = ProcessError::Other("boundary established".into());
-        assert_eq!(err.to_string(), "boundary established");
-    }
-}
+pub use containment::{process_alive, terminate_process, ContainmentError, JobObject};
+pub use supervisor::{
+    CancelMode, DiscardLines, LineSink, ProcessError, ProcessExit, ProcessLine, ProcessSpec,
+    ProcessStream, ProcessSupervisor, Result, SupervisedProcess, TracingLineSink,
+};

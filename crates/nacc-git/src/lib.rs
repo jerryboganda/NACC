@@ -107,6 +107,21 @@ pub async fn git_version() -> Result<String> {
     Ok(run_git(None, &["--version"]).await?.trim().to_string())
 }
 
+/// Initialize a brand-new repository at `path` on `initial_branch`, and
+/// return a handle to it. Needed by the "add a project" flow (master plan
+/// S17.3): a user pointing NACC at a folder that is not yet a repository
+/// gets offered exactly this, rather than being told to go run git
+/// themselves. Deliberately does not configure an identity or make an
+/// initial commit -- both are separate, explicit steps
+/// (`configure_identity`, `commit`), so NACC never invents a Git identity
+/// on a user's behalf and never creates a commit they did not ask for.
+pub async fn init_repository(path: &Path, initial_branch: &str) -> Result<GitRepository> {
+    std::fs::create_dir_all(path)?;
+    let branch_arg = format!("--initial-branch={initial_branch}");
+    run_git(Some(path), &["init", &branch_arg]).await?;
+    GitRepository::open(path).await
+}
+
 impl GitRepository {
     /// Open an existing Git working tree at `root`, failing with
     /// [`GitError::NotARepository`] if it is not one (or `git` is not on
@@ -130,6 +145,45 @@ impl GitRepository {
         &self.root
     }
 
+    /// Resolve any commit-ish (branch, tag, `HEAD`, short or full SHA) to
+    /// the full 40-character SHA of the commit it points at. This is how
+    /// a worktree lease records a *stable* base to compare against later
+    /// -- recording the string `"main"` would be worthless for drift
+    /// detection, since `main` moves.
+    pub async fn resolve_commit(&self, rev: &str) -> Result<String> {
+        let spec = format!("{rev}^{{commit}}");
+        Ok(run_git(Some(&self.root), &["rev-parse", "--verify", &spec])
+            .await?
+            .trim()
+            .to_string())
+    }
+
+    /// Set the repository-local commit identity. Scoped with `--local`
+    /// (never `--global`): NACC configures the repository the user added,
+    /// and must not silently rewrite their machine-wide Git settings.
+    pub async fn configure_identity(&self, email: &str, name: &str) -> Result<()> {
+        run_git(Some(&self.root), &["config", "--local", "user.email", email]).await?;
+        run_git(Some(&self.root), &["config", "--local", "user.name", name]).await?;
+        Ok(())
+    }
+
+    /// Stage every change (master plan S11's "local commit" step of the
+    /// vertical slice). Uses `git add -A` rather than enumerating paths so
+    /// deletions are staged too.
+    pub async fn stage_all(&self) -> Result<()> {
+        run_git(Some(&self.root), &["add", "-A"]).await?;
+        Ok(())
+    }
+
+    /// Commit the staged changes and return the new commit's SHA. Fails if
+    /// there is nothing staged (`git commit` exits non-zero), which is the
+    /// honest outcome -- a workflow step that expected to commit something
+    /// must not be told it succeeded.
+    pub async fn commit(&self, message: &str) -> Result<String> {
+        run_git(Some(&self.root), &["commit", "-m", message]).await?;
+        self.head_commit().await
+    }
+
     /// The current branch name, or the literal string `"HEAD"` on a
     /// detached HEAD (git's own convention for `--abbrev-ref HEAD`) --
     /// callers that need to distinguish a detached HEAD reliably should
@@ -143,7 +197,23 @@ impl GitRepository {
         )
     }
 
-    /// The full SHA of `HEAD`.
+    /// The branch `HEAD` points at, via `git symbolic-ref --short HEAD`.
+    /// Unlike [`Self::current_branch`], this works on a freshly initialized
+    /// repository with no commits yet (an "unborn" HEAD, where
+    /// `rev-parse --abbrev-ref HEAD` fails with `fatal: ambiguous argument
+    /// 'HEAD'`) -- which is exactly the state the Setup Wizard sees right
+    /// after offering to initialize a project, so it needs a way to name
+    /// that branch without lying about it.
+    pub async fn configured_branch(&self) -> Result<String> {
+        Ok(
+            run_git(Some(&self.root), &["symbolic-ref", "--short", "HEAD"])
+                .await?
+                .trim()
+                .to_string(),
+        )
+    }
+
+    /// The full SHA of `HEAD`. Errors on a repository with no commits yet.
     pub async fn head_commit(&self) -> Result<String> {
         Ok(run_git(Some(&self.root), &["rev-parse", "HEAD"])
             .await?
@@ -223,6 +293,33 @@ impl GitRepository {
     pub async fn has_uncommitted_changes(&self, path: &Path) -> Result<bool> {
         let output = run_git(Some(path), &["status", "--porcelain"]).await?;
         Ok(!output.trim().is_empty())
+    }
+
+    /// How many commits `HEAD` at `path` has that are not reachable from
+    /// `base` (a commit-ish). This is the precise "is there work here that
+    /// exists nowhere else?" question master plan S16 rule 9's cleanup
+    /// policy needs: a worktree with zero commits beyond its base and a
+    /// clean working tree holds nothing worth preserving.
+    pub async fn count_commits_ahead_of(&self, path: &Path, base: &str) -> Result<u32> {
+        let range = format!("{base}..HEAD");
+        let output = run_git(Some(path), &["rev-list", "--count", &range]).await?;
+        output
+            .trim()
+            .parse::<u32>()
+            .map_err(|e| GitError::ParseError {
+                context: "rev-list --count <base>..HEAD",
+                detail: format!("{e}: {output:?}"),
+            })
+    }
+
+    /// Drop Git's bookkeeping for worktrees whose directories no longer
+    /// exist at their recorded path. Called after a lease is quarantined
+    /// (moved aside), so `git worktree list` does not keep advertising the
+    /// old location -- with the quarantined directory itself left fully
+    /// intact for recovery.
+    pub async fn prune_worktrees(&self) -> Result<()> {
+        run_git(Some(&self.root), &["worktree", "prune"]).await?;
+        Ok(())
     }
 
     /// Whether the branch checked out at `path` has commits not present
@@ -516,6 +613,74 @@ mod tests {
     async fn git_version_reports_a_real_version_string() {
         let version = git_version().await.expect("git must be installed in CI");
         assert!(version.to_lowercase().contains("git version"));
+    }
+
+    #[tokio::test]
+    async fn init_repository_creates_a_usable_repository() {
+        let dir = TempRepoDir::new("init");
+        let repo = init_repository(dir.path(), "main")
+            .await
+            .expect("init_repository must produce an openable repository");
+        assert_eq!(
+            repo.configured_branch().await.unwrap(),
+            "main",
+            "a brand-new repository has no commits, so its branch is read from HEAD's symbolic ref"
+        );
+        // And `current_branch` genuinely cannot answer yet -- documented
+        // behavior, asserted rather than assumed.
+        assert!(repo.current_branch().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_commit_turns_a_branch_name_into_a_stable_sha() {
+        let (_dir, repo) = init_test_repo().await;
+        let resolved = repo.resolve_commit("main").await.unwrap();
+        assert_eq!(resolved.len(), 40);
+        assert_eq!(resolved, repo.head_commit().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn count_commits_ahead_of_is_zero_immediately_after_branching() {
+        let (dir, repo) = init_test_repo().await;
+        let head = repo.head_commit().await.unwrap();
+        assert_eq!(repo.count_commits_ahead_of(dir.path(), &head).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn prune_worktrees_is_a_real_git_call_not_a_no_op_stub() {
+        let (_dir, repo) = init_test_repo().await;
+        repo.prune_worktrees()
+            .await
+            .expect("`git worktree prune` must succeed against a real repository");
+    }
+
+    #[tokio::test]
+    async fn stage_all_and_commit_produce_a_real_commit() {
+        let (dir, repo) = init_test_repo().await;
+        let before = repo.head_commit().await.unwrap();
+        std::fs::write(dir.path().join("new-file.txt"), "content\n").unwrap();
+        repo.stage_all().await.unwrap();
+        let after = repo.commit("nacc test commit").await.unwrap();
+        assert_ne!(before, after, "commit must move HEAD forward");
+        assert!(!repo.has_uncommitted_changes(dir.path()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn commit_with_nothing_staged_is_an_error_not_a_silent_no_op() {
+        let (_dir, repo) = init_test_repo().await;
+        // A commit step that *thinks* it committed is worse than one that
+        // fails loudly, so this must be a real error.
+        assert!(repo.commit("nothing to commit").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn configure_identity_is_repository_local_only() {
+        let (_dir, repo) = init_test_repo().await;
+        repo.configure_identity("nacc@example.invalid", "NACC").await.unwrap();
+        let email = run_git(Some(repo.root()), &["config", "--local", "user.email"])
+            .await
+            .unwrap();
+        assert_eq!(email.trim(), "nacc@example.invalid");
     }
 
     #[test]

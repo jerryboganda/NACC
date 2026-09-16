@@ -394,6 +394,60 @@ pub struct RoleProfile {
     pub updated_at_millis: u64,
 }
 
+define_id!(
+    WorktreeLeaseId,
+    "Identifies one NACC-allocated Git worktree lease (master plan S16's worktree lifecycle)."
+);
+
+/// Lifecycle state of a worktree lease (master plan S16: allocation,
+/// integration, release, quarantine). Closed and exhaustive on purpose: the
+/// whole point of the lease record is that "what happened to this
+/// worktree?" always has exactly one answer.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeState {
+    /// Allocated to a run and usable now.
+    Active,
+    /// Moved aside because it was dirty/unpushed when its run ended. Never
+    /// deleted: master plan S16 requires quarantine over destruction so a
+    /// human can still recover the work.
+    Quarantined,
+    /// Cleanly removed (its branch was integrated or explicitly abandoned).
+    Released,
+}
+
+/// One lease on a Git worktree NACC created. Persisted (so it survives a
+/// crash and can be reconciled on startup, master plan S16/S17), unlike the
+/// raw `git worktree list` output, which only says what exists *right now*
+/// and nothing about who owns it or why.
+#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+pub struct WorktreeLease {
+    pub id: WorktreeLeaseId,
+    pub project_id: ProjectId,
+    pub workflow_run_id: Option<WorkflowRunId>,
+    pub node_run_id: Option<NodeRunId>,
+    /// Absolute path of the allocated worktree.
+    pub path: String,
+    /// The branch checked out in it.
+    pub branch: String,
+    /// The commit the worktree was created from -- the reference point
+    /// drift detection compares against.
+    pub base_commit: String,
+    /// Last commit NACC observed in this worktree (updated by
+    /// `inspect`), so "an agent committed something while we were not
+    /// looking" is visible after a restart.
+    pub head_commit: Option<String>,
+    pub state: WorktreeState,
+    /// The process that owned this lease when it was allocated, used by
+    /// startup reconciliation to tell "still running" from "orphaned by a
+    /// crash". `None` for leases allocated outside a process (tests,
+    /// future non-process flows).
+    pub owner_process_id: Option<u32>,
+    pub quarantine_reason: Option<String>,
+    pub created_at_millis: u64,
+    pub updated_at_millis: u64,
+}
+
 #[cfg(test)]
 mod canonical_control_tests {
     use super::*;
@@ -444,6 +498,38 @@ mod canonical_control_tests {
         let json = serde_json::to_string(&kind).unwrap();
         let back: RoleKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, kind);
+    }
+
+    #[test]
+    fn worktree_state_json_is_snake_case_and_closed() {
+        assert_eq!(
+            serde_json::to_string(&WorktreeState::Quarantined).unwrap(),
+            "\"quarantined\""
+        );
+    }
+
+    #[test]
+    fn worktree_lease_roundtrips_with_an_absent_owner_process() {
+        let lease = WorktreeLease {
+            id: WorktreeLeaseId::new(),
+            project_id: ProjectId::new(),
+            workflow_run_id: None,
+            node_run_id: None,
+            path: "C:\\worktrees\\impl-1".to_string(),
+            branch: "nacc/impl-1".to_string(),
+            base_commit: "a".repeat(40),
+            head_commit: None,
+            state: WorktreeState::Active,
+            owner_process_id: None,
+            quarantine_reason: None,
+            created_at_millis: 1,
+            updated_at_millis: 1,
+        };
+        let json = serde_json::to_string(&lease).unwrap();
+        let back: WorktreeLease = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, lease.id);
+        assert!(back.head_commit.is_none());
+        assert!(back.owner_process_id.is_none());
     }
 
     #[test]

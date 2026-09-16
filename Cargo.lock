@@ -2127,7 +2127,11 @@ version = "0.0.1"
 dependencies = [
  "nacc-domain",
  "serde",
+ "specta",
  "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2267,8 +2271,15 @@ name = "nacc-worktree"
 version = "0.0.1"
 dependencies = [
  "nacc-domain",
+ "nacc-git",
+ "nacc-process",
+ "nacc-storage",
  "serde",
+ "serde_json",
+ "specta",
  "thiserror 2.0.20",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

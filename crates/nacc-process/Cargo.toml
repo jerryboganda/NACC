@@ -1,6 +1,6 @@
 [package]
 name = "nacc-process"
-description = "Windows Job Object process containment, ConPTY/PTY streaming, graceful and forced cancellation (master plan S10, S13.4 -- Phase 3 scope for real process supervision)."
+description = "Windows Job Object process containment, PTY-less line streaming, and graceful/forced cancellation (master plan S10, S13.4 -- Phase 3 scope for real process supervision)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +8,20 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-nacc-domain = { workspace = true }
-serde = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+specta = { workspace = true }
+
+[dev-dependencies]
+# Test-only: strong IDs for unique temp-directory names, matching the
+# pattern nacc-storage's own tests use.
+nacc-domain = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# Only the Win32 namespaces this crate actually calls. Verified against
+# windows-sys 0.61.2 (already in this workspace's Cargo.lock transitively
+# via Tauri) rather than adopting a second, differently-versioned binding
+# crate: one Windows FFI surface in the build graph, not two.
+windows-sys = { workspace = true }

@@ -43,6 +43,7 @@ mod events;
 mod migrations;
 mod role_profiles;
 mod settings;
+mod worktree_leases;
 
 /// Errors from any storage operation. Repository methods that can fail for
 /// entity-specific reasons (e.g. "no role profile with that id") add a
@@ -67,6 +68,8 @@ pub enum StorageError {
     },
     #[error("no role profile found with id {0}")]
     RoleProfileNotFound(nacc_domain::RoleProfileId),
+    #[error("no worktree lease found with id {0}")]
+    WorktreeLeaseNotFound(nacc_domain::WorktreeLeaseId),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
