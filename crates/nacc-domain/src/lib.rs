@@ -141,7 +141,9 @@ define_id!(
 /// architectural constants"), this identifies the *adapter*, not a model:
 /// exact model IDs are always provider-reported strings, never hard-coded
 /// (see `ModelId` below).
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize, specta::Type)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize, specta::Type,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderId {
     Claude,
@@ -229,7 +231,10 @@ mod tests {
         // provider lists must not reshuffle between runs.
         let mut ids = vec![ProviderId::Opencode, ProviderId::Claude, ProviderId::Codex];
         ids.sort();
-        assert_eq!(ids, vec![ProviderId::Claude, ProviderId::Codex, ProviderId::Opencode]);
+        assert_eq!(
+            ids,
+            vec![ProviderId::Claude, ProviderId::Codex, ProviderId::Opencode]
+        );
     }
 
     #[test]

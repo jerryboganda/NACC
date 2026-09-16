@@ -38,12 +38,9 @@ publish = false
 
 # Versions verified directly against crates.io on 2026-08-30 (see
 # docs/adr/0001-foundation-selection.md and docs/audits/foundation-audit.md
-# for the verification method this workspace follows). Only dependencies
-# actually used by a Phase 1/2 crate are pinned here; crates needed by later
-# phases (portable-pty, notify, reqwest, keyring, secrecy, zeroize, ...) are
-# deliberately NOT pre-declared -- they get verified fresh, at the point
-# they are actually adopted, per the master plan's "discover/validate
-# dynamically, don't hard-code" principle (S2.7).
+# for the verification method this workspace follows). Dependencies used
+# by a later phase are added only when that phase starts and after their
+# current contract has been checked -- never predeclared speculatively.
 [workspace.dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -88,6 +85,19 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
+
+# Deliberately absent, for the record: portable-pty / win32job / the
+# `windows` crate. An earlier Phase 3 attempt on this branch (commit
+# e87cc3b, still in history) added them for a PTY-based supervisor. That
+# supervisor was superseded by this crate's modular containment + line-stream
+# design -- the one every later phase is wired into -- so the dependencies
+# are not carried. The PTY capability itself is deferred rather than
+# dropped: no provider adapter NACC implements (Claude Code, Codex, the
+# Antigravity CLI, Copilot, OpenCode) needs a pseudo-console for the
+# non-interactive modes Phase 5/8 launch them in, and `CapabilitySnapshot`
+# reports `interactive_pty` as a real per-provider fact, so its absence is
+# visible rather than hidden. Portable-pty is still the right library when
+# a consumer exists; nothing here should be read as rejecting it.
 
 tauri = "2.11.5"
 tauri-build = "2.6.3" # default features include config-json, required since tauri.conf.json is JSON

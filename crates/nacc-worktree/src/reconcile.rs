@@ -143,12 +143,14 @@ impl WorktreeManager {
         let managed_root =
             std::fs::canonicalize(worktrees_root).unwrap_or_else(|_| worktrees_root.to_path_buf());
         for info in repo.list_worktrees().await? {
-            let candidate =
-                std::fs::canonicalize(&info.path).unwrap_or_else(|_| info.path.clone());
+            let candidate = std::fs::canonicalize(&info.path).unwrap_or_else(|_| info.path.clone());
             if !candidate.starts_with(&managed_root) {
                 continue;
             }
-            if known_paths.iter().any(|known| paths_equal(known, &info.path)) {
+            if known_paths
+                .iter()
+                .any(|known| paths_equal(known, &info.path))
+            {
                 continue;
             }
             tracing::warn!(
@@ -266,7 +268,10 @@ mod tests {
                 owner_process_id: std::process::id(),
             }]
         );
-        assert!(std::path::Path::new(&lease.path).is_dir(), "nothing may be moved while the owner lives");
+        assert!(
+            std::path::Path::new(&lease.path).is_dir(),
+            "nothing may be moved while the owner lives"
+        );
     }
 
     #[tokio::test]
@@ -281,7 +286,11 @@ mod tests {
             .allocate(&repo, request(project, &root, "Crashed Run"))
             .await
             .unwrap();
-        std::fs::write(std::path::Path::new(&lease.path).join("half-done.rs"), "work\n").unwrap();
+        std::fs::write(
+            std::path::Path::new(&lease.path).join("half-done.rs"),
+            "work\n",
+        )
+        .unwrap();
 
         let report = manager
             .reconcile(&repo, &root.join(".nacc-worktrees"), project)
@@ -321,7 +330,11 @@ mod tests {
         assert_eq!(report.released(), 1);
         assert!(!std::path::Path::new(&lease.path).exists());
         assert_eq!(
-            db.get_worktree_lease(lease.id).await.unwrap().unwrap().state,
+            db.get_worktree_lease(lease.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
             WorktreeState::Released
         );
     }
@@ -340,12 +353,11 @@ mod tests {
         // it by hand.
         std::fs::create_dir_all(&managed).unwrap();
         let orphan = managed.join("by-hand");
-        repo.add_worktree(&orphan, "nacc-by-hand", "HEAD").await.unwrap();
-
-        let report = manager
-            .reconcile(&repo, &managed, project)
+        repo.add_worktree(&orphan, "nacc-by-hand", "HEAD")
             .await
             .unwrap();
+
+        let report = manager.reconcile(&repo, &managed, project).await.unwrap();
 
         assert!(report.needs_attention());
         assert_eq!(report.unmanaged().len(), 1);
@@ -379,7 +391,11 @@ mod tests {
             .reconcile(&repo, &root.join(".nacc-worktrees"), mine)
             .await
             .unwrap();
-        assert_eq!(report.actions.len(), 1, "only this project's lease is reconciled");
+        assert_eq!(
+            report.actions.len(),
+            1,
+            "only this project's lease is reconciled"
+        );
         assert!(
             std::path::Path::new(&theirs.path).is_dir(),
             "another project's worktree must be untouched"
@@ -397,4 +413,3 @@ mod tests {
         }));
     }
 }
-

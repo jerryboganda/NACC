@@ -162,7 +162,11 @@ impl GitRepository {
     /// (never `--global`): NACC configures the repository the user added,
     /// and must not silently rewrite their machine-wide Git settings.
     pub async fn configure_identity(&self, email: &str, name: &str) -> Result<()> {
-        run_git(Some(&self.root), &["config", "--local", "user.email", email]).await?;
+        run_git(
+            Some(&self.root),
+            &["config", "--local", "user.email", email],
+        )
+        .await?;
         run_git(Some(&self.root), &["config", "--local", "user.name", name]).await?;
         Ok(())
     }
@@ -643,7 +647,12 @@ mod tests {
     async fn count_commits_ahead_of_is_zero_immediately_after_branching() {
         let (dir, repo) = init_test_repo().await;
         let head = repo.head_commit().await.unwrap();
-        assert_eq!(repo.count_commits_ahead_of(dir.path(), &head).await.unwrap(), 0);
+        assert_eq!(
+            repo.count_commits_ahead_of(dir.path(), &head)
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -676,7 +685,9 @@ mod tests {
     #[tokio::test]
     async fn configure_identity_is_repository_local_only() {
         let (_dir, repo) = init_test_repo().await;
-        repo.configure_identity("nacc@example.invalid", "NACC").await.unwrap();
+        repo.configure_identity("nacc@example.invalid", "NACC")
+            .await
+            .unwrap();
         let email = run_git(Some(repo.root()), &["config", "--local", "user.email"])
             .await
             .unwrap();

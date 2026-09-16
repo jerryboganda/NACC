@@ -471,7 +471,10 @@ mod tests {
         let root = repo.root().to_path_buf();
 
         let lease = manager
-            .allocate(&repo, request(ProjectId::new(), &root, "Backend Implementer"))
+            .allocate(
+                &repo,
+                request(ProjectId::new(), &root, "Backend Implementer"),
+            )
             .await
             .expect("allocation against a real repository must succeed");
 
@@ -541,7 +544,10 @@ mod tests {
         let inspection = manager.inspect(&repo, &lease).await.unwrap();
         assert!(inspection.path_exists);
         assert!(inspection.registered);
-        assert_eq!(inspection.current_branch.as_deref(), Some(lease.branch.as_str()));
+        assert_eq!(
+            inspection.current_branch.as_deref(),
+            Some(lease.branch.as_str())
+        );
         assert!(
             inspection.drift.is_empty(),
             "unexpected drift: {:?}",
@@ -577,7 +583,10 @@ mod tests {
         // Commit the change (through the real typed API), then re-inspect:
         // HEAD has moved and the tree is clean again.
         let worktree_repo = GitRepository::open(&worktree).await.unwrap();
-        worktree_repo.configure_identity("a@b.invalid", "Agent").await.unwrap();
+        worktree_repo
+            .configure_identity("a@b.invalid", "Agent")
+            .await
+            .unwrap();
         worktree_repo.stage_all().await.unwrap();
         worktree_repo.commit("agent commit").await.unwrap();
 
@@ -616,7 +625,10 @@ mod tests {
         let inspection = manager.inspect(&repo, &lease).await.unwrap();
         assert!(!inspection.path_exists);
         assert_eq!(inspection.drift, vec![WorktreeDrift::MissingPath]);
-        assert!(inspection.must_preserve(), "a missing worktree is never 'clean'");
+        assert!(
+            inspection.must_preserve(),
+            "a missing worktree is never 'clean'"
+        );
     }
 
     #[tokio::test]
@@ -633,12 +645,18 @@ mod tests {
         let worktree = PathBuf::from(&lease.path);
         std::fs::write(worktree.join("x.txt"), "x\n").unwrap();
         let worktree_repo = GitRepository::open(&worktree).await.unwrap();
-        worktree_repo.configure_identity("a@b.invalid", "Agent").await.unwrap();
+        worktree_repo
+            .configure_identity("a@b.invalid", "Agent")
+            .await
+            .unwrap();
         worktree_repo.stage_all().await.unwrap();
         let new_head = worktree_repo.commit("change").await.unwrap();
 
         let inspection = manager.inspect(&repo, &lease).await.unwrap();
-        let updated = manager.record_inspection(&lease, &inspection).await.unwrap();
+        let updated = manager
+            .record_inspection(&lease, &inspection)
+            .await
+            .unwrap();
         assert_eq!(updated.head_commit.as_deref(), Some(new_head.as_str()));
 
         let stored = db.get_worktree_lease(lease.id).await.unwrap().unwrap();
@@ -661,7 +679,9 @@ mod tests {
             manager.branch_name("Fix Login Bug!!", id),
             manager.branch_name("Fix Login Bug!!", id)
         );
-        assert!(manager.branch_name("Fix Login Bug!!", id).starts_with("nacc/fix-login-bug-"));
+        assert!(manager
+            .branch_name("Fix Login Bug!!", id)
+            .starts_with("nacc/fix-login-bug-"));
     }
 
     #[test]

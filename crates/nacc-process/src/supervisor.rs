@@ -123,10 +123,23 @@ pub struct ProcessSpec {
     pub program: String,
     pub args: Vec<String>,
     pub working_directory: PathBuf,
-    /// Extra environment variables layered on top of the inherited
-    /// environment (e.g. `WSL_UTF8=1` for `wsl.exe`, or a provider's
-    /// documented project-root override).
+    /// Extra environment variables. By default these are layered on top of
+    /// the inherited environment (e.g. `WSL_UTF8=1` for `wsl.exe`, or a
+    /// provider's documented project-root override);
+    /// [`Self::isolated_environment`] changes that to an allowlist.
     pub env: Vec<(String, String)>,
+    /// Whether the child inherits NACC's own environment. `true` by
+    /// default; `false` after [`Self::isolated_environment`], which clears
+    /// the inherited environment and applies only `env`.
+    ///
+    /// This exists because an inherited environment is a real
+    /// secret-exfiltration path (master plan S12's "always approval-gated
+    /// operations"/S13.5's secrets rules): a user's shell often carries
+    /// provider API keys, cloud credentials, and CI tokens, and a coding
+    /// agent that can read them has been handed access nobody granted.
+    /// Isolated mode makes the child's environment an explicit, auditable
+    /// decision instead of an accident of how NACC was started.
+    pub inherit_environment: bool,
     /// Human-readable label for logs and audit records.
     pub label: String,
 }
@@ -140,7 +153,54 @@ impl ProcessSpec {
             args: Vec::new(),
             working_directory: working_directory.into(),
             env: Vec::new(),
+            inherit_environment: true,
         }
+    }
+
+    /// Clear the inherited environment; only variables added with
+    /// [`Self::env`] will exist in the child. Callers using this must opt
+    /// in to whatever the process genuinely needs (`PATH`, `USERPROFILE`,
+    /// the provider's own config directory), which is the point.
+    pub fn isolated_environment(mut self) -> Self {
+        self.inherit_environment = false;
+        self
+    }
+
+    /// Reject a spec that can never be spawned safely, before anything is
+    /// created. A NUL byte inside an argument truncates the command line at
+    /// the OS boundary -- the classic argument-injection shape -- so it is
+    /// refused here rather than silently producing a shorter command than
+    /// the audit record claims was run.
+    pub fn validate(&self) -> Result<()> {
+        if self.program.trim().is_empty() {
+            return Err(ProcessError::InvalidSpec(
+                "program must not be empty".to_string(),
+            ));
+        }
+        if self.program.contains('\0') || self.args.iter().any(|arg| arg.contains('\0')) {
+            return Err(ProcessError::InvalidSpec(
+                "program and arguments must not contain NUL bytes".to_string(),
+            ));
+        }
+        if !self.working_directory.is_dir() {
+            return Err(ProcessError::InvalidSpec(format!(
+                "working directory does not exist or is not a directory: {}",
+                self.working_directory.display()
+            )));
+        }
+        for (name, value) in &self.env {
+            if name.trim().is_empty() || name.contains('=') || name.contains('\0') {
+                return Err(ProcessError::InvalidSpec(format!(
+                    "invalid environment variable name: {name:?}"
+                )));
+            }
+            if value.contains('\0') {
+                return Err(ProcessError::InvalidSpec(format!(
+                    "environment variable {name:?} contains a NUL byte"
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
@@ -205,6 +265,8 @@ impl ProcessExit {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProcessError {
+    #[error("invalid process specification: {0}")]
+    InvalidSpec(String),
     #[error("failed to spawn `{program}`: {source}")]
     Spawn {
         program: String,
@@ -247,6 +309,10 @@ impl ProcessSupervisor {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        spec.validate()?;
+        if !spec.inherit_environment {
+            command.env_clear();
+        }
         for (key, value) in &spec.env {
             command.env(key, value);
         }
@@ -290,10 +356,18 @@ impl ProcessSupervisor {
 
         let mut readers = Vec::new();
         if let Some(stdout) = stdout {
-            readers.push(spawn_reader(stdout, ProcessStream::Stdout, Arc::clone(&sink)));
+            readers.push(spawn_reader(
+                stdout,
+                ProcessStream::Stdout,
+                Arc::clone(&sink),
+            ));
         }
         if let Some(stderr) = stderr {
-            readers.push(spawn_reader(stderr, ProcessStream::Stderr, Arc::clone(&sink)));
+            readers.push(spawn_reader(
+                stderr,
+                ProcessStream::Stderr,
+                Arc::clone(&sink),
+            ));
         }
 
         // The channel value is "the exit code once known": `None` means
@@ -370,11 +444,7 @@ impl ProcessSupervisor {
     }
 }
 
-fn spawn_reader<R>(
-    reader: R,
-    stream: ProcessStream,
-    sink: Arc<dyn LineSink>,
-) -> JoinHandle<()>
+fn spawn_reader<R>(reader: R, stream: ProcessStream, sink: Arc<dyn LineSink>) -> JoinHandle<()>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -439,9 +509,10 @@ impl SupervisedProcess {
         let stdin = guard
             .as_mut()
             .ok_or_else(|| ProcessError::Other("process stdin is already closed".into()))?;
-        stdin.write_all(data).await.map_err(|e| {
-            ProcessError::Other(format!("failed to write to process stdin: {e}"))
-        })?;
+        stdin
+            .write_all(data)
+            .await
+            .map_err(|e| ProcessError::Other(format!("failed to write to process stdin: {e}")))?;
         stdin
             .flush()
             .await
@@ -659,6 +730,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn validate_rejects_specs_that_could_not_be_spawned_faithfully() {
+        let dir = std::env::temp_dir();
+        assert!(matches!(
+            ProcessSpec::new("  ", &dir).validate(),
+            Err(ProcessError::InvalidSpec(_))
+        ));
+        assert!(
+            matches!(
+                ProcessSpec::new("cmd.exe", &dir)
+                    .arg("ok\0truncated")
+                    .validate(),
+                Err(ProcessError::InvalidSpec(_))
+            ),
+            "a NUL byte in an argument must be refused, not silently truncated by the OS"
+        );
+        assert!(matches!(
+            ProcessSpec::new("cmd.exe", &dir)
+                .env("BAD=NAME", "value")
+                .validate(),
+            Err(ProcessError::InvalidSpec(_))
+        ));
+        assert!(ProcessSpec::new("cmd.exe", &dir).validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_a_working_directory_that_is_not_a_directory() {
+        let missing = std::env::temp_dir().join("nacc-process-no-such-directory");
+        assert!(matches!(
+            ProcessSpec::new("cmd.exe", &missing).validate(),
+            Err(ProcessError::InvalidSpec(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn isolated_environment_hides_the_parent_environment() {
+        // The parent process unavoidably has PATH/USERPROFILE set; an
+        // isolated child must not see them.
+        assert!(
+            std::env::var_os("USERPROFILE").is_some() || std::env::var_os("PATH").is_some(),
+            "this test is only meaningful when the parent really has an environment"
+        );
+        let spec = ProcessSpec::new("cmd.exe", std::env::temp_dir())
+            .args(["/C", "set"])
+            .env("NACC_ISOLATED_MARKER", "present")
+            .isolated_environment()
+            .label("isolated-env");
+        let out = ProcessSupervisor::new().capture(spec).await.unwrap();
+        assert!(out.succeeded(), "{out:?}");
+        assert!(
+            out.stdout.contains("NACC_ISOLATED_MARKER"),
+            "an explicitly allowed variable must be present: {:?}",
+            out.stdout
+        );
+        assert!(
+            !out.stdout.to_uppercase().contains("USERPROFILE="),
+            "the inherited environment must be gone: {:?}",
+            out.stdout
+        );
+    }
+
     #[tokio::test]
     async fn capture_returns_stdout_stderr_and_the_exit_code_together() {
         let spec = ProcessSpec::new("cmd.exe", std::env::temp_dir())
@@ -677,7 +809,10 @@ mod tests {
             .args(["/C", "echo to-stderr 1>&2"])
             .label("stream-separation");
 
-        let process = ProcessSupervisor::new().spawn(spec, sink.clone()).await.unwrap();
+        let process = ProcessSupervisor::new()
+            .spawn(spec, sink.clone())
+            .await
+            .unwrap();
         process.wait().await.unwrap();
 
         let stderr_lines: Vec<String> = sink
@@ -759,7 +894,10 @@ mod tests {
             .await
             .unwrap();
         let exit = process.wait().await.unwrap();
-        assert!(exit.cancelled, "the exit must be reported as a cancellation");
+        assert!(
+            exit.cancelled,
+            "the exit must be reported as a cancellation"
+        );
 
         wait_until_dead(grandchild, Duration::from_secs(20)).await;
         assert!(

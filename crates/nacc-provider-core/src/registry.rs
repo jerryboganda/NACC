@@ -118,10 +118,7 @@ mod tests {
         async fn capabilities(&self, _c: &CapabilityContext) -> Result<CapabilitySnapshot> {
             Err(ProviderError::Other("stub".into()))
         }
-        async fn validate_profile(
-            &self,
-            _p: &ResolvedAgentProfile,
-        ) -> Result<ProfileValidation> {
+        async fn validate_profile(&self, _p: &ResolvedAgentProfile) -> Result<ProfileValidation> {
             Ok(ProfileValidation {
                 supported: false,
                 issues: vec!["stub".into()],
@@ -170,8 +167,12 @@ mod tests {
     #[test]
     fn registering_the_same_provider_twice_is_a_typed_error() {
         let mut registry = ProviderRegistry::new();
-        registry.register(Arc::new(Stub(ProviderId::Codex))).unwrap();
-        let err = registry.register(Arc::new(Stub(ProviderId::Codex))).unwrap_err();
+        registry
+            .register(Arc::new(Stub(ProviderId::Codex)))
+            .unwrap();
+        let err = registry
+            .register(Arc::new(Stub(ProviderId::Codex)))
+            .unwrap_err();
         assert!(err.to_string().contains("already registered"));
         assert_eq!(registry.len(), 1, "the original registration must survive");
     }
@@ -179,7 +180,9 @@ mod tests {
     #[test]
     fn requiring_an_unregistered_provider_names_what_is_available() {
         let mut registry = ProviderRegistry::new();
-        registry.register(Arc::new(Stub(ProviderId::Copilot))).unwrap();
+        registry
+            .register(Arc::new(Stub(ProviderId::Copilot)))
+            .unwrap();
         // Not `unwrap_err()`: `&Arc<dyn AgentProvider>` has no `Debug`, and
         // making the trait `Debug` just to please a test helper would be the
         // tail wagging the dog.
@@ -187,7 +190,9 @@ mod tests {
             Ok(_) => panic!("an unregistered provider must not resolve"),
             Err(err) => err,
         };
-        assert!(err.to_string().contains("no provider adapter is registered"));
+        assert!(err
+            .to_string()
+            .contains("no provider adapter is registered"));
         assert!(err.to_string().contains("Copilot"));
     }
 

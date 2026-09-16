@@ -151,7 +151,11 @@ impl ContractReport {
         }
         let mut out = format!("{} contract violation(s):", self.findings.len());
         for finding in &self.findings {
-            out.push_str(&format!("\n  - [{}] {}", finding.check.as_str(), finding.detail));
+            out.push_str(&format!(
+                "\n  - [{}] {}",
+                finding.check.as_str(),
+                finding.detail
+            ));
         }
         out
     }
@@ -170,7 +174,10 @@ impl RecordingSink {
     }
 
     pub fn events(&self) -> Vec<ProviderEvent> {
-        self.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn len(&self) -> usize {
@@ -183,9 +190,7 @@ impl RecordingSink {
 
     /// Index of the first event matching `predicate`.
     pub fn position_of(&self, predicate: impl Fn(&ProviderEvent) -> bool) -> Option<usize> {
-        self.events()
-            .iter()
-            .position(predicate)
+        self.events().iter().position(predicate)
     }
 }
 
@@ -318,8 +323,11 @@ pub async fn run_contract_suite(
         // `if let` on the one shape that is a violation: every other
         // outcome (explicitly unsupported, or a typed error) is a correct
         // answer to "validate this model" when the model is unknown.
-        if let Ok(ProfileValidation { supported: true, .. }) =
-            provider.validate_profile(&harness.profile_for(bogus.clone())).await
+        if let Ok(ProfileValidation {
+            supported: true, ..
+        }) = provider
+            .validate_profile(&harness.profile_for(bogus.clone()))
+            .await
         {
             finding(
                 ContractCheck::UnsupportedModelRejected,
@@ -436,7 +444,9 @@ pub async fn run_contract_suite(
         if let Ok(Some(observation)) = provider.collect_usage(&handle.session_id).await {
             let unlabelled = match &observation {
                 crate::provider::UsageObservation::Exact { detail }
-                | crate::provider::UsageObservation::Estimated { detail } => detail.trim().is_empty(),
+                | crate::provider::UsageObservation::Estimated { detail } => {
+                    detail.trim().is_empty()
+                }
                 crate::provider::UsageObservation::Unknown => false,
             };
             if unlabelled {
@@ -729,10 +739,7 @@ mod tests {
                 captured_at_millis: 0,
             })
         }
-        async fn validate_profile(
-            &self,
-            _p: &ResolvedAgentProfile,
-        ) -> Result<ProfileValidation> {
+        async fn validate_profile(&self, _p: &ResolvedAgentProfile) -> Result<ProfileValidation> {
             // Accepts anything -- the catastrophic case S10.1 forbids.
             Ok(ProfileValidation {
                 supported: true,
@@ -852,7 +859,9 @@ mod tests {
             sink.position_of(|event| matches!(event, ProviderEvent::SessionCompleted)),
             Some(1)
         );
-        assert!(sink.position_of(|event| matches!(event, ProviderEvent::Warning { .. })).is_none());
+        assert!(sink
+            .position_of(|event| matches!(event, ProviderEvent::Warning { .. }))
+            .is_none());
     }
 
     #[tokio::test]

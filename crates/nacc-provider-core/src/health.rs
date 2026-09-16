@@ -153,9 +153,7 @@ mod tests {
         for health in [
             ProviderHealth::NotInstalled,
             ProviderHealth::Unauthenticated,
-            ProviderHealth::IneligibleCredential {
-                detail: "x".into(),
-            },
+            ProviderHealth::IneligibleCredential { detail: "x".into() },
             ProviderHealth::IncompatibleVersion { detail: "x".into() },
         ] {
             assert!(

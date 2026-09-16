@@ -17,7 +17,9 @@ use rusqlite::{OptionalExtension, Row};
 
 use crate::{lock, Database, Result, StorageError};
 
-fn row_to_lease(row: &Row<'_>) -> rusqlite::Result<std::result::Result<WorktreeLease, StorageError>> {
+fn row_to_lease(
+    row: &Row<'_>,
+) -> rusqlite::Result<std::result::Result<WorktreeLease, StorageError>> {
     let state_json: String = row.get("state_json")?;
     let project_id: String = row.get("project_id")?;
     let workflow_run_id: Option<String> = row.get("workflow_run_id")?;
@@ -84,13 +86,13 @@ fn parse_uuid<T: std::str::FromStr<Err = nacc_domain::DomainError>>(
     raw: &str,
     entity: &'static str,
 ) -> std::result::Result<T, StorageError> {
-    raw.parse().map_err(|e: nacc_domain::DomainError| {
-        StorageError::CorruptStoredValue {
+    raw.parse().map_err(
+        |e: nacc_domain::DomainError| StorageError::CorruptStoredValue {
             entity,
             value: raw.to_string(),
             detail: format!("{e}"),
-        }
-    })
+        },
+    )
 }
 
 impl Database {
@@ -172,10 +174,7 @@ impl Database {
         .expect("storage worker thread panicked")
     }
 
-    pub async fn get_worktree_lease(
-        &self,
-        id: WorktreeLeaseId,
-    ) -> Result<Option<WorktreeLease>> {
+    pub async fn get_worktree_lease(&self, id: WorktreeLeaseId) -> Result<Option<WorktreeLease>> {
         let conn = self.connection();
         let id = id.to_string();
         tokio::task::spawn_blocking(move || -> Result<Option<WorktreeLease>> {

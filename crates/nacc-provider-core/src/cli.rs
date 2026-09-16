@@ -226,9 +226,11 @@ impl CommandRunner for FixtureCommandRunner {
             .invocations
             .iter()
             .find(|invocation| invocation.program == program && invocation.args == args)
-            .ok_or_else(|| ProviderError::Other(format!(
+            .ok_or_else(|| {
+                ProviderError::Other(format!(
                 "no recorded fixture for `{key}` -- add the invocation to this adapter's fixtures", 
-            )))?;
+            ))
+            })?;
 
         Ok(CommandOutput {
             program: program.to_string(),

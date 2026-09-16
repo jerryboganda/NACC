@@ -35,7 +35,10 @@ pub enum ReleasePolicy {
 /// What actually happened.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReleaseOutcome {
-    Removed { path: PathBuf, branch: String },
+    Removed {
+        path: PathBuf,
+        branch: String,
+    },
     /// Moved aside with everything intact. `destination` is where the work
     /// now lives; `reason` says why it was not safe to remove.
     Quarantined {
@@ -44,8 +47,12 @@ pub enum ReleaseOutcome {
     },
     /// The directory was already gone -- bookkeeping only, nothing was
     /// deleted (and nothing could have been).
-    AlreadyAbsent { path: PathBuf },
-    Kept { reason: String },
+    AlreadyAbsent {
+        path: PathBuf,
+    },
+    Kept {
+        reason: String,
+    },
 }
 
 /// A release plus the evidence it was based on.
@@ -80,7 +87,9 @@ impl WorktreeManager {
         }
 
         if !inspection.path_exists {
-            let updated = self.mark_released(lease, "worktree directory was already absent").await?;
+            let updated = self
+                .mark_released(lease, "worktree directory was already absent")
+                .await?;
             return Ok(ReleaseReport {
                 lease: updated,
                 inspection: inspection.clone(),
@@ -96,7 +105,10 @@ impl WorktreeManager {
             return Ok(ReleaseReport {
                 lease: updated,
                 inspection,
-                outcome: ReleaseOutcome::Quarantined { destination, reason },
+                outcome: ReleaseOutcome::Quarantined {
+                    destination,
+                    reason,
+                },
             });
         }
 
@@ -228,7 +240,6 @@ impl WorktreeManager {
         tracing::debug!(lease_id = %updated.id, reason, "lease released");
         Ok(updated)
     }
-
 }
 
 /// Human-readable reason string for a preservation decision, built from the
@@ -291,7 +302,10 @@ mod tests {
             .unwrap();
 
         assert!(matches!(report.outcome, ReleaseOutcome::Removed { .. }));
-        assert!(!path.exists(), "a clean, unintegrated-nothing worktree is removed");
+        assert!(
+            !path.exists(),
+            "a clean, unintegrated-nothing worktree is removed"
+        );
         assert_eq!(
             db.get_worktree_lease(lease.id)
                 .await
@@ -321,7 +335,10 @@ mod tests {
             .unwrap();
 
         let destination = match &report.outcome {
-            ReleaseOutcome::Quarantined { destination, reason } => {
+            ReleaseOutcome::Quarantined {
+                destination,
+                reason,
+            } => {
                 assert!(
                     reason.contains("uncommitted changes"),
                     "the reason must name the actual finding: {reason}"
@@ -330,7 +347,10 @@ mod tests {
             }
             other => panic!("expected quarantine, got {other:?}"),
         };
-        assert!(!worktree.exists(), "the worktree moved rather than staying put");
+        assert!(
+            !worktree.exists(),
+            "the worktree moved rather than staying put"
+        );
         assert_eq!(
             std::fs::read_to_string(destination.join("unfinished.rs")).unwrap(),
             "fn todo() {}\n",
@@ -347,7 +367,10 @@ mod tests {
 
         let stored = db.get_worktree_lease(lease.id).await.unwrap().unwrap();
         assert_eq!(stored.state, WorktreeState::Quarantined);
-        assert!(stored.quarantine_reason.unwrap().contains("uncommitted changes"));
+        assert!(stored
+            .quarantine_reason
+            .unwrap()
+            .contains("uncommitted changes"));
         assert_eq!(stored.path, destination.to_string_lossy());
     }
 
@@ -403,7 +426,11 @@ mod tests {
         assert!(matches!(report.outcome, ReleaseOutcome::Kept { .. }));
         assert!(PathBuf::from(&lease.path).is_dir());
         assert_eq!(
-            db.get_worktree_lease(lease.id).await.unwrap().unwrap().state,
+            db.get_worktree_lease(lease.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
             WorktreeState::Active,
             "a kept lease stays active so reconciliation still owns it"
         );
@@ -425,9 +452,16 @@ mod tests {
             .release(&repo, &lease, ReleasePolicy::RemoveIfSafe)
             .await
             .unwrap();
-        assert!(matches!(report.outcome, ReleaseOutcome::AlreadyAbsent { .. }));
+        assert!(matches!(
+            report.outcome,
+            ReleaseOutcome::AlreadyAbsent { .. }
+        ));
         assert_eq!(
-            db.get_worktree_lease(lease.id).await.unwrap().unwrap().state,
+            db.get_worktree_lease(lease.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
             WorktreeState::Released
         );
     }

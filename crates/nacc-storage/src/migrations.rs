@@ -231,9 +231,11 @@ mod tests {
         migrations().to_latest(&mut conn).unwrap();
 
         let value: String = conn
-            .query_row("SELECT value FROM app_settings WHERE key = 'schema'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'schema'",
+                [],
+                |r| r.get(0),
+            )
             .expect("a row written at V2 must survive the V3 upgrade");
         assert_eq!(value, "v2");
         let tables: i64 = conn
