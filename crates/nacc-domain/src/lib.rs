@@ -337,6 +337,40 @@ pub enum PermissionProfile {
     TemporaryDangerFullAccess,
 }
 
+impl PermissionProfile {
+    /// Where this profile sits on the privilege ladder. Used to *compare* two
+    /// profiles -- never to grant anything: the point of a total order here is
+    /// that two independent answers to "what may this agent do?" (a workflow
+    /// node's declared profile and the Role Matrix row's configured profile)
+    /// can be reduced to one, and the reduction is only ever allowed to make
+    /// the result *narrower*.
+    pub const fn rank(self) -> u8 {
+        match self {
+            PermissionProfile::ReadOnly => 0,
+            PermissionProfile::PlanOnly => 1,
+            PermissionProfile::AutonomousWorktree => 2,
+            PermissionProfile::RepositoryMaintainer => 3,
+            PermissionProfile::CiMaintainer => 4,
+            PermissionProfile::ReleaseCandidate => 5,
+            PermissionProfile::TemporaryDangerFullAccess => 6,
+        }
+    }
+
+    /// The narrower of two profiles. Asymmetric on purpose: callers use it as
+    /// "the configuration may restrict what a workflow asked for, and may not
+    /// expand it" (master plan S12.1) -- so a role row configured as
+    /// `ReadOnly` cannot be widened by a node that declares
+    /// `RepositoryMaintainer`, while a node asking for `ReadOnly` stays
+    /// read-only even if its role row is configured wider.
+    pub const fn narrower_of(self, other: Self) -> Self {
+        if self.rank() <= other.rank() {
+            self
+        } else {
+            other
+        }
+    }
+}
+
 impl fmt::Display for PermissionProfile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
@@ -409,6 +443,10 @@ pub struct RoleProfile {
 }
 
 define_id!(
+    ApprovalId,
+    "Identifies one approval request/decision attached to a workflow node (master plan S12, S14.1)."
+);
+define_id!(
     CapabilitySnapshotId,
     "Identifies one persisted capability snapshot (master plan S4.4's provider-installation and discovered-model data group)."
 );
@@ -466,6 +504,144 @@ pub struct WorktreeLease {
     pub updated_at_millis: u64,
 }
 
+/// Lifecycle state of one workflow run (master plan S14.1's durable state
+/// machine). Every variant is terminal-safe: `Paused` and `AwaitingApproval`
+/// mean "resumable", and `Interrupted` is the state a crash leaves behind
+/// for reconciliation to pick up.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    Pending,
+    Running,
+    /// Deliberately stopped by a user; resumable.
+    Paused,
+    /// Blocked on a human approval gate (master plan S12.2).
+    AwaitingApproval,
+    /// The process died mid-run. Reconciliation turns this back into a
+    /// resumable run rather than pretending it failed.
+    Interrupted,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+impl RunState {
+    /// Whether the run has stopped moving on its own.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            RunState::Succeeded | RunState::Failed | RunState::Cancelled
+        )
+    }
+
+    /// Whether a caller may resume it.
+    pub fn is_resumable(&self) -> bool {
+        matches!(
+            self,
+            RunState::Pending | RunState::Paused | RunState::Interrupted
+        )
+    }
+}
+
+/// State of one node within a run. Closed, like every other state machine
+/// here: the engine decides transitions, and a caller that sees an
+/// unfamiliar value has a version mismatch to fix rather than a case to
+/// guess at.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeState {
+    /// Not yet eligible (dependencies incomplete).
+    Pending,
+    Running,
+    Succeeded,
+    /// Exhausted its attempts, or failed non-retryably.
+    Failed,
+    /// A dependency failed, so this node will never run.
+    Skipped,
+    Cancelled,
+}
+
+impl NodeState {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            NodeState::Succeeded | NodeState::Failed | NodeState::Skipped | NodeState::Cancelled
+        )
+    }
+}
+
+/// Why an attempt happened. Kept separate from the attempt's result because
+/// "this was a repair after an independent review finding" and "this was a
+/// plain retry after a timeout" are different facts in the audit trail
+/// (master plan S14.5).
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptTrigger {
+    Initial,
+    Retry,
+    Repair,
+    /// A declared fallback provider/role was used because the primary one
+    /// was unavailable (master plan S14.5's "visible fallbacks").
+    Fallback,
+    /// Re-queued by crash recovery.
+    Recovery,
+}
+
+/// A node that can be re-run, in order, when the primary assignment cannot
+/// serve the request. Empty means "no fallback declared" -- which is a real
+/// answer, not a missing one: the run then fails visibly instead of
+/// silently switching providers.
+#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+pub struct NodeFallback {
+    pub provider_id: ProviderId,
+    pub model_id: Option<ModelId>,
+    /// Shown to the user when the fallback is actually taken.
+    pub reason: String,
+}
+
+/// One node of a workflow template (master plan S14.2's DAG).
+#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+pub struct WorkflowNode {
+    /// Stable within a template; what `depends_on` and the UI refer to.
+    pub key: String,
+    pub title: String,
+    pub role: RoleKind,
+    /// Node keys that must succeed before this node runs.
+    pub depends_on: Vec<String>,
+    /// Prompt/instruction handed to the role's agent.
+    pub instruction: String,
+    /// The permission profile this node runs under. Declared per node rather
+    /// than per run because master plan S12.1's profiles are per-operation:
+    /// an integrator step writes to the repository while the explorer steps
+    /// beside it must not.
+    pub permission_profile_hint: PermissionProfile,
+    /// Never retried automatically when false (e.g. a destructive step).
+    pub retryable: bool,
+    /// Requires a recorded human approval before it runs (S12.2's
+    /// always-approval-gated operations).
+    pub requires_approval: bool,
+    pub fallbacks: Vec<NodeFallback>,
+}
+
+/// A named DAG, before it is instantiated as a run. Master plan S18's
+/// presets are built from this type.
+#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+pub struct WorkflowTemplate {
+    pub name: String,
+    pub description: String,
+    pub nodes: Vec<WorkflowNode>,
+}
+
+/// One approval gate (master plan S12.2's "always approval-gated
+/// operations"): requested when a node with `requires_approval` becomes
+/// ready, decided by a human, and never auto-approved by the engine.
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "decision", rename_all = "snake_case")]
+pub enum ApprovalDecision {
+    Approved { by: String },
+    Rejected { by: String, reason: String },
+}
+
 #[cfg(test)]
 mod canonical_control_tests {
     use super::*;
@@ -483,6 +659,55 @@ mod canonical_control_tests {
         // These must never collapse into each other: Off is a live user
         // choice, Unsupported means the GUI must disable the control.
         assert_ne!(ThinkingMode::Off, ThinkingMode::Unsupported);
+    }
+
+    #[test]
+    fn narrowing_a_profile_can_never_widen_it() {
+        use PermissionProfile::*;
+        let all = [
+            ReadOnly,
+            PlanOnly,
+            AutonomousWorktree,
+            RepositoryMaintainer,
+            CiMaintainer,
+            ReleaseCandidate,
+            TemporaryDangerFullAccess,
+        ];
+        for a in all {
+            for b in all {
+                let narrowed = a.narrower_of(b);
+                assert_eq!(narrowed, b.narrower_of(a), "narrowing must be symmetric");
+                assert!(
+                    narrowed.rank() <= a.rank() && narrowed.rank() <= b.rank(),
+                    "{a} narrowed with {b} produced {narrowed}, which is wider than an input"
+                );
+            }
+        }
+        // The two cases the rule actually exists for: a restrictive role row
+        // wins over an expansive node declaration, and a restrictive node
+        // declaration wins over an expansive role row.
+        assert_eq!(RepositoryMaintainer.narrower_of(ReadOnly), ReadOnly);
+        assert_eq!(ReadOnly.narrower_of(RepositoryMaintainer), ReadOnly);
+    }
+
+    #[test]
+    fn permission_profile_ranks_are_strictly_ordered() {
+        assert!(PermissionProfile::ReadOnly.rank() < PermissionProfile::PlanOnly.rank());
+        assert!(PermissionProfile::PlanOnly.rank() < PermissionProfile::AutonomousWorktree.rank());
+        assert!(
+            PermissionProfile::AutonomousWorktree.rank()
+                < PermissionProfile::RepositoryMaintainer.rank()
+        );
+        assert!(
+            PermissionProfile::RepositoryMaintainer.rank() < PermissionProfile::CiMaintainer.rank()
+        );
+        assert!(
+            PermissionProfile::CiMaintainer.rank() < PermissionProfile::ReleaseCandidate.rank()
+        );
+        assert!(
+            PermissionProfile::ReleaseCandidate.rank()
+                < PermissionProfile::TemporaryDangerFullAccess.rank()
+        );
     }
 
     #[test]
@@ -516,6 +741,64 @@ mod canonical_control_tests {
         let json = serde_json::to_string(&kind).unwrap();
         let back: RoleKind = serde_json::from_str(&json).unwrap();
         assert_eq!(back, kind);
+    }
+
+    #[test]
+    fn run_state_terminality_and_resumability_are_distinct_questions() {
+        assert!(RunState::Succeeded.is_terminal());
+        assert!(RunState::Cancelled.is_terminal());
+        assert!(RunState::Paused.is_resumable());
+        assert!(RunState::Interrupted.is_resumable());
+        // A paused run is not terminal (it can still be resumed), and a
+        // terminal run is not resumable -- the two must not be conflated.
+        assert!(!RunState::Paused.is_terminal());
+        assert!(!RunState::Succeeded.is_resumable());
+        assert!(!RunState::AwaitingApproval.is_terminal());
+    }
+
+    #[test]
+    fn node_state_terminality_includes_skipped() {
+        assert!(NodeState::Skipped.is_terminal());
+        assert!(!NodeState::Pending.is_terminal());
+        assert!(!NodeState::Running.is_terminal());
+    }
+
+    #[test]
+    fn approval_decision_roundtrips_with_its_decision_tag() {
+        let approved = ApprovalDecision::Approved {
+            by: "local_user".into(),
+        };
+        let json = serde_json::to_string(&approved).unwrap();
+        assert!(json.contains("\"decision\":\"approved\""));
+        let back: ApprovalDecision = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, approved);
+    }
+
+    #[test]
+    fn workflow_template_roundtrips_with_dependencies_and_fallbacks() {
+        let template = WorkflowTemplate {
+            name: "test".into(),
+            description: "test template".into(),
+            nodes: vec![WorkflowNode {
+                key: "explore".into(),
+                title: "Explore".into(),
+                role: RoleKind::RepositoryExplorer,
+                depends_on: vec![],
+                instruction: "explore".into(),
+                permission_profile_hint: PermissionProfile::ReadOnly,
+                retryable: true,
+                requires_approval: false,
+                fallbacks: vec![NodeFallback {
+                    provider_id: ProviderId::Codex,
+                    model_id: None,
+                    reason: "primary provider rate limited".into(),
+                }],
+            }],
+        };
+        let json = serde_json::to_string(&template).unwrap();
+        let back: WorkflowTemplate = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.nodes.len(), 1);
+        assert_eq!(back.nodes[0].fallbacks[0].provider_id, ProviderId::Codex);
     }
 
     #[test]
