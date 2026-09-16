@@ -1,0 +1,42 @@
+[
+  {
+    "program": "claude",
+    "args": [
+      "--print",
+      "contract suite probe",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      "fable",
+      "--permission-mode",
+      "plan",
+      "--session-id",
+      "*"
+    ],
+    "captured_from_version": null,
+    "stdout": "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"11111111-2222-3333-4444-555555555555\",\"model\":\"claude-fable-5\",\"tools\":[\"Bash\",\"Edit\"]}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Reading the repository layout.\"}]}}\n{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"C:/repo/src/lib.rs\"}}]}}\n{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"pub fn main() {}\"}]}}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"Explored the repository and produced a plan.\",\"total_cost_usd\":0.0123,\"usage\":{\"input_tokens\":1200,\"output_tokens\":340,\"cache_read_input_tokens\":900}}\n",
+    "stderr": "",
+    "exit_code": 0
+  },
+  {
+    "program": "claude",
+    "args": [
+      "--print",
+      "contract suite probe",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      "fable",
+      "--permission-mode",
+      "plan",
+      "--session-id",
+      "*"
+    ],
+    "captured_from_version": null,
+    "stdout": "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"11111111-2222-3333-4444-555555555555\",\"model\":\"claude-fable-5\"}\n{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"result\":\"rate limit exceeded, retry after 30s\"}\n",
+    "stderr": "stream ended early\n",
+    "exit_code": 1
+  }
+]

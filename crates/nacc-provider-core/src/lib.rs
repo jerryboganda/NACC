@@ -22,13 +22,15 @@ mod events;
 mod health;
 mod provider;
 mod registry;
+pub mod session;
 
 pub use capability::{
     AcpTransport, AuthProbe, CapabilitySnapshot, InstallationProbe, ModelDescriptor,
     ProviderInstallation, RuntimeLocation,
 };
 pub use cli::{
-    CommandOutput, CommandRunner, FixtureCommandRunner, ProcessCommandRunner, RecordedInvocation,
+    CommandLine, CommandLineSink, CommandOutput, CommandRunner, CommandStream,
+    FixtureCommandRunner, ProcessCommandRunner, RecordedInvocation, RunningCommand,
 };
 pub use contract::{
     adapter_fixture_dir, run_contract_suite, ContractCheck, ContractFinding, ContractHarness,
@@ -43,3 +45,7 @@ pub use provider::{
     RuntimeProfile, SessionId, UsageObservation,
 };
 pub use registry::ProviderRegistry;
+pub use session::{
+    launch_streaming_session, LineInterpretation, LineInterpreter, SessionEntry, SessionOutcome,
+    SessionState, SessionSupervisor, StreamingLaunch, GRACEFUL_CANCEL_WINDOW,
+};

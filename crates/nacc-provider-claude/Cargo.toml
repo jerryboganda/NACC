@@ -1,6 +1,6 @@
 [package]
 name = "nacc-provider-claude"
-description = "Provider adapter crate for the Claude CLI (master plan S9). Implements AgentProvider from nacc-provider-core; real CLI-invocation logic lands in a later phase (see docs/provider-adapters/)."
+description = "Provider adapter for Claude Code (master plan S9.1): real probing, argv construction, stream-json interpretation, and session lifecycle (Phase 5)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,8 +11,13 @@ publish.workspace = true
 nacc-domain = { workspace = true }
 nacc-provider-core = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+# serde_json is already a real dependency (stream-json parsing); listed here
+# only so the intent ("fixtures and tests use it too") is explicit.
+serde_json = { workspace = true }

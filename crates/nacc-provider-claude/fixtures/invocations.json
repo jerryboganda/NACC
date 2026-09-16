@@ -1,0 +1,18 @@
+[
+  {
+    "program": "claude",
+    "args": ["--version"],
+    "captured_from_version": "2.1.215 (Claude Code)",
+    "stdout": "2.1.215 (Claude Code)\n",
+    "stderr": "",
+    "exit_code": 0
+  },
+  {
+    "program": "claude",
+    "args": ["doctor"],
+    "captured_from_version": "2.1.215 (Claude Code)",
+    "stdout": "[OK] Claude Code configuration\n[OK] Credentials found\n",
+    "stderr": "",
+    "exit_code": 0
+  }
+]

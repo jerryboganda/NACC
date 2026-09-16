@@ -20,6 +20,7 @@
 //! here.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,39 @@ impl CommandOutput {
     }
 }
 
+/// One line of a running command's output, in the shape adapters consume.
+/// Re-exported from `nacc-process` rather than redefined: the line framing
+/// and the stream attribution must not differ between the layer that reads
+/// the pipe and the layer that interprets it.
+pub use nacc_process::{LineSink as CommandLineSink, ProcessLine as CommandLine};
+
+/// The stream a command line came from (`stdout` carries a provider's
+/// structured output; `stderr` carries its diagnostics).
+pub use nacc_process::ProcessStream as CommandStream;
+
+/// A command that has been started and is still running. `launch` needs
+/// this shape -- not a blocking `run` -- because cancellation has to reach a
+/// process that is *in flight* (master plan S13.4), and a provider run can
+/// last minutes while the GUI watches its events arrive.
+#[async_trait]
+pub trait RunningCommand: Send + Sync {
+    /// The OS process id of the direct child (useful for the audit trail
+    /// and for reconciliation).
+    fn pid(&self) -> u32;
+
+    /// Stop it: `graceful` closes the child's stdin and allows a bounded
+    /// period before the contained tree is terminated.
+    async fn cancel(
+        &self,
+        mode: nacc_process::CancelMode,
+        grace: std::time::Duration,
+    ) -> Result<()>;
+
+    /// Wait for completion, after which every output line has been
+    /// delivered to the sink.
+    async fn wait(&self) -> Result<CommandOutput>;
+}
+
 /// Executes a program with an argument array. Implemented for real by
 /// [`ProcessCommandRunner`]; replaced in tests by
 /// [`FixtureCommandRunner`].
@@ -66,6 +100,8 @@ impl CommandOutput {
 /// behavior is doing something wrong rather than needing a bigger API.
 #[async_trait]
 pub trait CommandRunner: Send + Sync {
+    /// Run to completion and return everything at once. Right for probes
+    /// (`--version`, a model list) and for JSON-mode runs parsed at the end.
     async fn run(
         &self,
         program: &str,
@@ -73,6 +109,21 @@ pub trait CommandRunner: Send + Sync {
         working_directory: &Path,
         env: &[(String, String)],
     ) -> Result<CommandOutput>;
+
+    /// Start a command and stream its lines to `sink` as they arrive,
+    /// returning a handle that can cancel and await it. There is no
+    /// default implementation on purpose: an adapter that silently fell
+    /// back to run-to-completion would break live streaming *and*
+    /// cancellation without saying so, and both are contract-visible
+    /// behaviors.
+    async fn spawn(
+        &self,
+        program: &str,
+        args: &[String],
+        working_directory: &Path,
+        env: &[(String, String)],
+        sink: Arc<dyn CommandLineSink>,
+    ) -> Result<Arc<dyn RunningCommand>>;
 }
 
 /// The real runner. `nacc-process` owns containment, cancellation, and
@@ -94,6 +145,51 @@ impl ProcessCommandRunner {
         Self {
             supervisor: nacc_process::ProcessSupervisor::new(),
         }
+    }
+}
+
+/// The real [`RunningCommand`]: a contained `nacc-process` child.
+struct ProcessRunningCommand {
+    program: String,
+    args: Vec<String>,
+    process: nacc_process::SupervisedProcess,
+}
+
+#[async_trait]
+impl RunningCommand for ProcessRunningCommand {
+    fn pid(&self) -> u32 {
+        self.process.pid()
+    }
+
+    async fn cancel(
+        &self,
+        mode: nacc_process::CancelMode,
+        grace: std::time::Duration,
+    ) -> Result<()> {
+        self.process
+            .cancel(mode, grace)
+            .await
+            .map_err(|err| ProviderError::Process(err.to_string()))
+    }
+
+    async fn wait(&self) -> Result<CommandOutput> {
+        let exit = self
+            .process
+            .wait()
+            .await
+            .map_err(|err| ProviderError::Process(err.to_string()))?;
+        // A run whose lines were consumed as they arrived cannot also return
+        // them; `CommandOutput::stdout` is therefore empty here and the
+        // adapter's own accumulated result is the source of truth for
+        // structured output. Documented rather than silently surprising.
+        Ok(CommandOutput {
+            program: self.program.clone(),
+            args: self.args.clone(),
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: exit.exit_code,
+            cancelled: exit.cancelled,
+        })
     }
 }
 
@@ -131,6 +227,37 @@ impl CommandRunner for ProcessCommandRunner {
             cancelled: captured.exit.cancelled,
         })
     }
+
+    async fn spawn(
+        &self,
+        program: &str,
+        args: &[String],
+        working_directory: &Path,
+        env: &[(String, String)],
+        sink: Arc<dyn CommandLineSink>,
+    ) -> Result<Arc<dyn RunningCommand>> {
+        let mut spec = nacc_process::ProcessSpec::new(program, working_directory)
+            .args(args.iter().cloned())
+            .label(program);
+        for (key, value) in env {
+            spec = spec.env(key.clone(), value.clone());
+        }
+        let process = self
+            .supervisor
+            .spawn(spec, sink)
+            .await
+            .map_err(|err| match err {
+                nacc_process::ProcessError::Spawn { .. } => ProviderError::NotInstalled {
+                    detail: err.to_string(),
+                },
+                other => ProviderError::Process(other.to_string()),
+            })?;
+        Ok(Arc::new(ProcessRunningCommand {
+            program: program.to_string(),
+            args: args.to_vec(),
+            process,
+        }))
+    }
 }
 
 /// One recorded invocation: what was run, and what came back. This is a
@@ -140,6 +267,13 @@ impl CommandRunner for ProcessCommandRunner {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecordedInvocation {
     pub program: String,
+    /// Argument pattern. An element of the literal string `"*"` matches
+    /// exactly one argument of any value -- never a variable-length span,
+    /// so matching stays deterministic and a fixture cannot silently absorb
+    /// an argument the adapter should not have added. Needed because some
+    /// arguments are genuinely unpredictable at fixture-capture time (a
+    /// per-run session UUID), and a fixture format that cannot express that
+    /// forces tests to stop covering those command lines at all.
     pub args: Vec<String>,
     /// The version string of the CLI these bytes were captured from, so a
     /// fixture that no longer matches a provider's output contract can be
@@ -151,6 +285,14 @@ pub struct RecordedInvocation {
     pub stderr: String,
     #[serde(default)]
     pub exit_code: Option<i32>,
+}
+
+fn args_match(pattern: &[String], actual: &[String]) -> bool {
+    pattern.len() == actual.len()
+        && pattern
+            .iter()
+            .zip(actual)
+            .all(|(expected, got)| expected == "*" || expected == got)
 }
 
 /// A [`CommandRunner`] that replays recorded invocations and fails loudly
@@ -225,11 +367,13 @@ impl CommandRunner for FixtureCommandRunner {
         let recorded = self
             .invocations
             .iter()
-            .find(|invocation| invocation.program == program && invocation.args == args)
+            .find(|invocation| {
+                invocation.program == program && args_match(&invocation.args, args)
+            })
             .ok_or_else(|| {
                 ProviderError::Other(format!(
-                "no recorded fixture for `{key}` -- add the invocation to this adapter's fixtures", 
-            ))
+                    "no recorded fixture for `{key}` -- add the invocation to this adapter's fixtures"
+                ))
             })?;
 
         Ok(CommandOutput {
@@ -240,6 +384,63 @@ impl CommandRunner for FixtureCommandRunner {
             exit_code: recorded.exit_code.or(Some(0)),
             cancelled: false,
         })
+    }
+
+    /// Replay the recorded output through the sink, then hand back a handle
+    /// that is already complete. Streaming order and cancellation behavior
+    /// are therefore *not* exercised by a fixture -- that is what the real
+    /// runner's own tests and the OS-level process tests cover. Stated
+    /// plainly so nobody reads a green fixture test as proof that live
+    /// streaming works.
+    async fn spawn(
+        &self,
+        program: &str,
+        args: &[String],
+        working_directory: &Path,
+        env: &[(String, String)],
+        sink: Arc<dyn CommandLineSink>,
+    ) -> Result<Arc<dyn RunningCommand>> {
+        let output = self.run(program, args, working_directory, env).await?;
+        for text in output.stdout.lines() {
+            sink.line(CommandLine {
+                stream: CommandStream::Stdout,
+                text: text.to_string(),
+            });
+        }
+        for text in output.stderr.lines() {
+            sink.line(CommandLine {
+                stream: CommandStream::Stderr,
+                text: text.to_string(),
+            });
+        }
+        Ok(Arc::new(FixtureRunningCommand { output }))
+    }
+}
+
+/// A [`RunningCommand`] that has already finished: the fixture runner has
+/// nothing live to cancel.
+struct FixtureRunningCommand {
+    output: CommandOutput,
+}
+
+#[async_trait]
+impl RunningCommand for FixtureRunningCommand {
+    fn pid(&self) -> u32 {
+        0
+    }
+
+    async fn cancel(
+        &self,
+        _mode: nacc_process::CancelMode,
+        _grace: std::time::Duration,
+    ) -> Result<()> {
+        Err(ProviderError::Other(
+            "a fixture-backed command has already completed and cannot be cancelled".to_string(),
+        ))
+    }
+
+    async fn wait(&self) -> Result<CommandOutput> {
+        Ok(self.output.clone())
     }
 }
 
@@ -299,6 +500,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_real_runner_streams_lines_live_and_can_cancel_a_running_command() {
+        struct Counting(std::sync::Mutex<Vec<String>>);
+        impl CommandLineSink for Counting {
+            fn line(&self, line: CommandLine) {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(line.text);
+            }
+        }
+
+        let sink = Arc::new(Counting(std::sync::Mutex::new(Vec::new())));
+        let runner = ProcessCommandRunner::new();
+        let command = runner
+            .spawn(
+                "cmd.exe",
+                &["/C".to_string(), "echo streamed-live".to_string()],
+                Path::new("."),
+                &[],
+                sink.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(command.pid() > 0, "a real child must report its pid");
+        let output = command.wait().await.unwrap();
+        assert!(output.succeeded(), "{output:?}");
+        assert!(sink
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|line| line.contains("streamed-live")));
+    }
+
+    #[tokio::test]
     async fn the_fixture_runner_replays_recorded_output_and_errors_on_a_miss() {
         let runner = FixtureCommandRunner::from_json(
             r#"[
@@ -330,5 +566,29 @@ mod tests {
     #[test]
     fn fixture_loading_fails_loudly_on_malformed_json() {
         assert!(FixtureCommandRunner::from_json("{not json").is_err());
+    }
+
+    #[test]
+    fn a_wildcard_matches_exactly_one_argument_and_never_a_span() {
+        let pattern = vec!["--session-id".to_string(), "*".to_string()];
+        assert!(args_match(
+            &pattern,
+            &["--session-id".to_string(), "abc".to_string()]
+        ));
+        assert!(!args_match(
+            &pattern,
+            &[
+                "--session-id".to_string(),
+                "abc".to_string(),
+                "extra".to_string()
+            ]
+        ));
+        assert!(!args_match(&pattern, &["--session-id".to_string()]));
+        // A wildcard must not widen a fixture to accept an argument the
+        // adapter should not have produced.
+        assert!(!args_match(
+            &pattern,
+            &["--other-flag".to_string(), "abc".to_string()]
+        ));
     }
 }

@@ -122,7 +122,7 @@ pub struct ResumeRequest {
 /// estimated usage, subscription-session counts, API cost, and unknown
 /// values. Modeled as a closed set so a UI can never accidentally render
 /// an estimate as if it were exact.
-#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "confidence", rename_all = "snake_case")]
 pub enum UsageObservation {
     Exact { detail: String },

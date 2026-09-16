@@ -1,0 +1,20 @@
+[
+  {
+    "program": "codex",
+    "args": [
+      "exec",
+      "--json",
+      "-m",
+      "gpt-5-codex",
+      "-s",
+      "read-only",
+      "-a",
+      "never",
+      "contract suite probe"
+    ],
+    "captured_from_version": null,
+    "stdout": "{\"type\":\"session.created\",\"session_id\":\"0192f0aa-1111-7222-8333-444455556666\"}\n{\"type\":\"item.started\",\"item\":{\"type\":\"reasoning\",\"text\":\"planning\"}}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"I will inspect the repository first.\"}}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\",\"command\":\"git status --porcelain\",\"exit_code\":0}}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"file_change\",\"path\":\"src/lib.rs\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":2048,\"output_tokens\":512,\"cached_input_tokens\":1024}}\n",
+    "stderr": "",
+    "exit_code": 0
+  }
+]

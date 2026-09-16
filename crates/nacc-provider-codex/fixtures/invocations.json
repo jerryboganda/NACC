@@ -1,0 +1,10 @@
+[
+  {
+    "program": "codex",
+    "args": ["--version"],
+    "captured_from_version": "codex-cli 0.149.1",
+    "stdout": "codex-cli 0.149.1\n",
+    "stderr": "",
+    "exit_code": 0
+  }
+]

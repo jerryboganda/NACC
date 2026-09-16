@@ -2154,8 +2154,10 @@ dependencies = [
  "nacc-domain",
  "nacc-provider-core",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2166,8 +2168,10 @@ dependencies = [
  "nacc-domain",
  "nacc-provider-core",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2194,6 +2198,7 @@ dependencies = [
  "specta",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

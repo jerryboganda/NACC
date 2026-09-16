@@ -19,10 +19,14 @@ nacc-process = { workspace = true }
 # findings are serialized by callers -- serde_json is a real dependency of
 # this crate since Phase 4, not only a test convenience.
 serde_json = { workspace = true }
+# `session.rs` spawns the background task that awaits a launched provider CLI
+# and emits its terminal event, so the adapters' shared plumbing needs the
+# runtime directly.
+tokio = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 async-trait = { workspace = true }
 specta = { workspace = true }
 
-[dev-dependencies]
-tokio = { workspace = true }
+
