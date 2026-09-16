@@ -44,7 +44,12 @@ mod migrations;
 mod providers;
 mod role_profiles;
 mod settings;
+mod workflow;
 mod worktree_leases;
+
+pub use workflow::{
+    ApprovalRecord, CheckpointRecord, NodeAttemptRecord, NodeRunRecord, WorkflowRunRecord,
+};
 
 /// Errors from any storage operation. Repository methods that can fail for
 /// entity-specific reasons (e.g. "no role profile with that id") add a
@@ -71,6 +76,14 @@ pub enum StorageError {
     RoleProfileNotFound(nacc_domain::RoleProfileId),
     #[error("no worktree lease found with id {0}")]
     WorktreeLeaseNotFound(nacc_domain::WorktreeLeaseId),
+    #[error("no workflow run found with id {0}")]
+    WorkflowRunNotFound(nacc_domain::WorkflowRunId),
+    #[error("no node run found with id {0}")]
+    NodeRunNotFound(nacc_domain::NodeRunId),
+    #[error("no node attempt found with id {0}")]
+    AttemptNotFound(nacc_domain::AttemptId),
+    #[error("approval {0} is not pending (it was already decided)")]
+    ApprovalNotPending(nacc_domain::ApprovalId),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;

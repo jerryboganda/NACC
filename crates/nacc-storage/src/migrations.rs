@@ -136,12 +136,85 @@ CREATE INDEX idx_capability_snapshots_provider
     ON capability_snapshots(provider_json, captured_at_millis);
 "#;
 
+/// Phase 7's durable workflow state (master plan S14.1's state machine,
+/// S16's crash recovery). Runs, node runs, attempts, approvals, and a
+/// per-run checkpoint sequence -- each a separate table because they have
+/// different lifetimes: a node transition rewrites one node row, an attempt
+/// is append-only, an approval carries a human decision, and checkpoints are
+/// a monotonic snapshot sequence.
+const V5_WORKFLOW_STATE: &str = r#"
+CREATE TABLE workflow_runs (
+    id                      TEXT PRIMARY KEY,
+    project_id              TEXT NOT NULL,
+    template_name           TEXT NOT NULL,
+    state_json              TEXT NOT NULL,
+    note                    TEXT,
+    created_at_millis       INTEGER NOT NULL,
+    updated_at_millis       INTEGER NOT NULL
+);
+
+CREATE INDEX idx_workflow_runs_project_id ON workflow_runs(project_id);
+CREATE INDEX idx_workflow_runs_state ON workflow_runs(state_json);
+
+CREATE TABLE node_runs (
+    id                      TEXT PRIMARY KEY,
+    workflow_run_id         TEXT NOT NULL,
+    node_key                TEXT NOT NULL,
+    title                   TEXT NOT NULL,
+    state_json              TEXT NOT NULL,
+    attempts                INTEGER NOT NULL,
+    definition_json         TEXT NOT NULL,
+    last_detail             TEXT,
+    created_at_millis       INTEGER NOT NULL,
+    updated_at_millis       INTEGER NOT NULL
+);
+
+CREATE INDEX idx_node_runs_run ON node_runs(workflow_run_id);
+
+CREATE TABLE node_attempts (
+    id                      TEXT PRIMARY KEY,
+    node_run_id             TEXT NOT NULL,
+    workflow_run_id         TEXT NOT NULL,
+    attempt_number          INTEGER NOT NULL,
+    trigger_json            TEXT NOT NULL,
+    finished_state_json     TEXT,
+    provider_json           TEXT,
+    detail                  TEXT,
+    started_at_millis       INTEGER NOT NULL,
+    finished_at_millis      INTEGER
+);
+
+CREATE INDEX idx_node_attempts_run ON node_attempts(workflow_run_id);
+
+CREATE TABLE approvals (
+    id                      TEXT PRIMARY KEY,
+    workflow_run_id         TEXT NOT NULL,
+    node_run_id             TEXT NOT NULL,
+    summary                 TEXT NOT NULL,
+    requested_at_millis     INTEGER NOT NULL,
+    decision_json           TEXT,
+    decided_at_millis       INTEGER
+);
+
+CREATE INDEX idx_approvals_run ON approvals(workflow_run_id);
+
+CREATE TABLE run_checkpoints (
+    workflow_run_id         TEXT NOT NULL,
+    sequence                INTEGER NOT NULL,
+    state_json              TEXT NOT NULL,
+    detail                  TEXT NOT NULL,
+    created_at_millis       INTEGER NOT NULL,
+    PRIMARY KEY (workflow_run_id, sequence)
+);
+"#;
+
 pub(crate) fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(V1_INITIAL_SCHEMA),
         M::up(V2_CORRELATION_INDEXES),
         M::up(V3_WORKTREE_LEASES),
         M::up(V4_PROVIDER_CAPABILITIES),
+        M::up(V5_WORKFLOW_STATE),
     ])
 }
 
@@ -167,8 +240,8 @@ mod tests {
         migrations().to_latest(&mut conn).unwrap();
         let version = migrations().current_version(&conn).unwrap();
         assert!(
-            matches!(version, SchemaVersion::Inside(n) if n.get() == 4),
-            "expected schema version 4, got {version:?}"
+            matches!(version, SchemaVersion::Inside(n) if n.get() == 5),
+            "expected schema version 5, got {version:?}"
         );
     }
 
@@ -199,11 +272,11 @@ mod tests {
         assert_eq!(value, "v");
         assert!(matches!(
             migrations().current_version(&conn).unwrap(),
-            SchemaVersion::Inside(n) if n.get() == 4
+            SchemaVersion::Inside(n) if n.get() == 5
         ));
 
         // And the V2 index must actually exist now -- proves V2 really
-        // ran, not just that current_version reports 4.
+        // ran, not just that current_version reports 5.
         let index_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_workflow_run_id'",
@@ -246,5 +319,101 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tables, 1, "V3 must have created the lease table");
+    }
+
+    #[test]
+    fn a_database_left_at_v3_upgrades_to_v4_keeping_its_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let up_to_v3 = Migrations::new(vec![
+            M::up(V1_INITIAL_SCHEMA),
+            M::up(V2_CORRELATION_INDEXES),
+            M::up(V3_WORKTREE_LEASES),
+        ]);
+        up_to_v3.to_latest(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO worktree_leases (
+                id, project_id, path, branch, base_commit, state_json,
+                created_at_millis, updated_at_millis
+             ) VALUES ('lease-1', 'project-1', 'D:\\repo\\.nacc-worktrees\\wt', 'nacc/fix-1', 'abc123', '\"Allocated\"', 10, 10)",
+            [],
+        )
+        .unwrap();
+
+        migrations().to_latest(&mut conn).unwrap();
+
+        let branch: String = conn
+            .query_row(
+                "SELECT branch FROM worktree_leases WHERE id = 'lease-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("a lease written at V3 must survive the V4 upgrade");
+        assert_eq!(branch, "nacc/fix-1");
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'provider_installations'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            tables, 1,
+            "V4 must have created the provider-installation table"
+        );
+    }
+
+    #[test]
+    fn a_database_left_at_v4_upgrades_to_v5_keeping_its_rows() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let up_to_v4 = Migrations::new(vec![
+            M::up(V1_INITIAL_SCHEMA),
+            M::up(V2_CORRELATION_INDEXES),
+            M::up(V3_WORKTREE_LEASES),
+            M::up(V4_PROVIDER_CAPABILITIES),
+        ]);
+        up_to_v4.to_latest(&mut conn).unwrap();
+        // Both V4 tables get a real row: installations are the (provider,
+        // runtime)-keyed detection facts, snapshots the append-only
+        // capability observations, and neither may be lost by the upgrade.
+        conn.execute(
+            "INSERT INTO provider_installations (
+                provider_json, runtime_json, installed, executable_path, version,
+                detected_at_millis
+             ) VALUES ('\"claude\"', '\"native\"', 1, 'C:/bin/claude.exe', '1.0', 20)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO capability_snapshots (
+                id, provider_json, runtime_json, snapshot_json, captured_at_millis
+             ) VALUES ('snap-1', '\"claude\"', '\"native\"', '{}', 21)",
+            [],
+        )
+        .unwrap();
+
+        migrations().to_latest(&mut conn).unwrap();
+
+        let installed: i64 = conn
+            .query_row(
+                "SELECT installed FROM provider_installations WHERE provider_json = '\"claude\"'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("an installation written at V4 must survive the V5 upgrade");
+        assert_eq!(installed, 1);
+        let snapshots: i64 = conn
+            .query_row("SELECT COUNT(*) FROM capability_snapshots", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(snapshots, 1);
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_runs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 1, "V5 must have created the workflow-runs table");
     }
 }
