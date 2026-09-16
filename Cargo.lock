@@ -2188,6 +2188,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "nacc-domain",
+ "nacc-process",
  "serde",
  "serde_json",
  "specta",
@@ -2249,6 +2250,7 @@ version = "0.0.1"
 dependencies = [
  "nacc-domain",
  "nacc-events",
+ "nacc-provider-core",
  "rusqlite",
  "rusqlite_migration",
  "serde_json",

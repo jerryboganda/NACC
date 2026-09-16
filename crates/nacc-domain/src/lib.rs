@@ -141,7 +141,7 @@ define_id!(
 /// architectural constants"), this identifies the *adapter*, not a model:
 /// exact model IDs are always provider-reported strings, never hard-coded
 /// (see `ModelId` below).
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, specta::Type)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderId {
     Claude,
@@ -221,6 +221,15 @@ mod tests {
     fn invalid_id_string_is_a_typed_error_not_a_panic() {
         let result = "not-a-uuid".parse::<ProjectId>();
         assert!(matches!(result, Err(DomainError::InvalidId { .. })));
+    }
+
+    #[test]
+    fn provider_ids_have_a_stable_total_order() {
+        // `ProviderRegistry` keys on `ProviderId` in a `BTreeMap`, so
+        // provider lists must not reshuffle between runs.
+        let mut ids = vec![ProviderId::Opencode, ProviderId::Claude, ProviderId::Codex];
+        ids.sort();
+        assert_eq!(ids, vec![ProviderId::Claude, ProviderId::Codex, ProviderId::Opencode]);
     }
 
     #[test]
@@ -394,6 +403,10 @@ pub struct RoleProfile {
     pub updated_at_millis: u64,
 }
 
+define_id!(
+    CapabilitySnapshotId,
+    "Identifies one persisted capability snapshot (master plan S4.4's provider-installation and discovered-model data group)."
+);
 define_id!(
     WorktreeLeaseId,
     "Identifies one NACC-allocated Git worktree lease (master plan S16's worktree lifecycle)."

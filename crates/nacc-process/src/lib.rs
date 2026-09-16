@@ -32,6 +32,6 @@ pub mod supervisor;
 
 pub use containment::{process_alive, terminate_process, ContainmentError, JobObject};
 pub use supervisor::{
-    CancelMode, DiscardLines, LineSink, ProcessError, ProcessExit, ProcessLine, ProcessSpec,
-    ProcessStream, ProcessSupervisor, Result, SupervisedProcess, TracingLineSink,
+    CancelMode, CapturedOutput, DiscardLines, LineSink, ProcessError, ProcessExit, ProcessLine,
+    ProcessSpec, ProcessStream, ProcessSupervisor, Result, SupervisedProcess, TracingLineSink,
 };

@@ -41,6 +41,7 @@ use rusqlite::Connection;
 mod audit;
 mod events;
 mod migrations;
+mod providers;
 mod role_profiles;
 mod settings;
 mod worktree_leases;

@@ -62,11 +62,21 @@ pub enum RuntimeLocation {
 /// A timestamped, versioned capability record for one provider+account
 /// combination (master plan S8.3's full field list -- reproduced here
 /// with real types rather than the plan's prose list).
+///
+/// Phase 4 added `auth` and `health`. `health` is *derived*, never stored
+/// independently of the probes beside it, and
+/// `crate::contract::run_contract_suite` enforces that with the
+/// `SnapshotHealthFollowsProbes` check -- a snapshot that claims `Ready`
+/// while its own probes say otherwise is a real failure mode (a GUI
+/// showing green for a provider that cannot launch), so it is a contract
+/// violation rather than a documentation note.
 #[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
 pub struct CapabilitySnapshot {
     pub provider: ProviderId,
     pub runtime: RuntimeLocation,
     pub installation: InstallationProbe,
+    pub auth: AuthProbe,
+    pub health: crate::health::ProviderHealth,
     pub models: Vec<ModelDescriptor>,
     pub noninteractive_mode: bool,
     pub structured_json_output: bool,
@@ -92,6 +102,20 @@ pub struct CapabilitySnapshot {
     /// using a plain integer sidesteps both problems and is directly
     /// usable as a JS timestamp on the frontend.
     pub captured_at_millis: u64,
+}
+
+/// What NACC last detected about one provider CLI on one runtime -- the
+/// durable half of detection (master plan S4.4's "provider installations"
+/// data group, S17.1's prerequisite list). Distinct from
+/// [`InstallationProbe`] because the probe is a point-in-time observation
+/// and this records *whose* observation it was, on which runtime, and
+/// when -- facts the Setup Wizard and a support bundle both need.
+#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+pub struct ProviderInstallation {
+    pub provider: ProviderId,
+    pub runtime: RuntimeLocation,
+    pub probe: InstallationProbe,
+    pub detected_at_millis: u64,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Serialize, Deserialize, specta::Type)]
@@ -131,6 +155,12 @@ mod tests {
                 executable_path: Some("copilot.exe".into()),
                 version: Some("1.0.82".into()),
             },
+            auth: AuthProbe {
+                authenticated: true,
+                account_label: Some("octocat".into()),
+                detail: None,
+            },
+            health: crate::health::ProviderHealth::Ready,
             models: vec![],
             noninteractive_mode: true,
             structured_json_output: true,
@@ -149,6 +179,8 @@ mod tests {
         let back: CapabilitySnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(back.provider, ProviderId::Copilot);
         assert_eq!(back.acp_transport, AcpTransport::Native);
+        assert_eq!(back.health, crate::health::ProviderHealth::Ready);
+        assert_eq!(back.auth.account_label.as_deref(), Some("octocat"));
         assert!(
             back.captured_at_millis > 0,
             "now_millis_for_test() must produce a real, nonzero timestamp"

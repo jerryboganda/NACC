@@ -31,7 +31,7 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -168,6 +168,23 @@ impl ProcessSpec {
     }
 }
 
+/// Everything a short-lived command produced. Returned by
+/// [`ProcessSupervisor::capture`] for the many uses where a caller wants
+/// the whole output at once rather than a line stream (a `--version`
+/// probe, a JSON-mode run whose result is parsed at the end).
+#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+pub struct CapturedOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit: ProcessExit,
+}
+
+impl CapturedOutput {
+    pub fn succeeded(&self) -> bool {
+        self.exit.succeeded()
+    }
+}
+
 /// How a supervised process ended.
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, specta::Type)]
 pub struct ProcessExit {
@@ -301,6 +318,24 @@ impl ProcessSupervisor {
             readers: Mutex::new(readers),
             watcher: Mutex::new(Some(watcher)),
             cancelled: AtomicBool::new(false),
+        })
+    }
+
+    /// Run `spec` to completion, returning all of its output. Lines are
+    /// re-joined with `\n`: a trailing newline (or its absence) is not
+    /// preserved, which is deliberate -- callers parse structured output
+    /// (JSON Lines, a version string) where trailing-whitespace fidelity is
+    /// meaningless, and preserving byte-exact framing would require a
+    /// second, raw path this crate does not need yet.
+    pub async fn capture(&self, spec: ProcessSpec) -> Result<CapturedOutput> {
+        let sink = Arc::new(BufferSink::default());
+        let process = self.spawn(spec, sink.clone()).await?;
+        let exit = process.wait().await?;
+        let (stdout, stderr) = sink.take_joined();
+        Ok(CapturedOutput {
+            stdout,
+            stderr,
+            exit,
         })
     }
 
@@ -539,10 +574,34 @@ impl Drop for SupervisedProcess {
     }
 }
 
+/// Buffers every line, for [`ProcessSupervisor::capture`]. Private: the
+/// public shape is [`CapturedOutput`], not a sink.
+#[derive(Default)]
+struct BufferSink(StdMutex<Vec<ProcessLine>>);
+
+impl BufferSink {
+    fn take_joined(&self) -> (String, String) {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        for line in self.0.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
+            match line.stream {
+                ProcessStream::Stdout => stdout.push(line.text),
+                ProcessStream::Stderr => stderr.push(line.text),
+            }
+        }
+        (stdout.join("\n"), stderr.join("\n"))
+    }
+}
+
+impl LineSink for BufferSink {
+    fn line(&self, line: ProcessLine) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(line);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
 
     struct VecSink(StdMutex<Vec<ProcessLine>>);
 
@@ -598,6 +657,17 @@ mod tests {
             "the process's stdout line must reach the sink: {:?}",
             sink.texts()
         );
+    }
+
+    #[tokio::test]
+    async fn capture_returns_stdout_stderr_and_the_exit_code_together() {
+        let spec = ProcessSpec::new("cmd.exe", std::env::temp_dir())
+            .args(["/C", "echo captured-line && echo captured-error 1>&2"])
+            .label("capture");
+        let out = ProcessSupervisor::new().capture(spec).await.unwrap();
+        assert!(out.succeeded(), "{out:?}");
+        assert!(out.stdout.contains("captured-line"), "{:?}", out.stdout);
+        assert!(out.stderr.contains("captured-error"), "{:?}", out.stderr);
     }
 
     #[tokio::test]

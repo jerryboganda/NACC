@@ -9,6 +9,11 @@ publish.workspace = true
 
 [dependencies]
 nacc-domain = { workspace = true }
+# Phase 4: provider installation and capability-snapshot records are
+# persisted as the provider-core types themselves (see `providers.rs`'s
+# module doc for why this direction and not a duplicated storage-local
+# shape). Acyclic: nacc-provider-core never mentions storage.
+nacc-provider-core = { workspace = true }
 nacc-events = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

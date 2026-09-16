@@ -9,11 +9,20 @@ publish.workspace = true
 
 [dependencies]
 nacc-domain = { workspace = true }
+# Phase 4: the contained-command runner every adapter executes through
+# (`ProcessCommandRunner`). nacc-process is a generic process API with no
+# knowledge of any provider CLI, so this keeps the crate's "nothing here
+# knows about a specific CLI" property while still giving adapters one
+# shared, contained execution path instead of five ad-hoc ones.
+nacc-process = { workspace = true }
+# Recorded CLI fixtures (`cli.rs`) are JSON, and the contract suite's
+# findings are serialized by callers -- serde_json is a real dependency of
+# this crate since Phase 4, not only a test convenience.
+serde_json = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 specta = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 tokio = { workspace = true }

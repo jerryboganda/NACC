@@ -107,11 +107,41 @@ CREATE INDEX idx_worktree_leases_project_id ON worktree_leases(project_id);
 CREATE INDEX idx_worktree_leases_workflow_run_id ON worktree_leases(workflow_run_id);
 "#;
 
+/// Phase 4's provider detection and capability records (master plan S4.4's
+/// "provider installations, discovered models" data group). Installations
+/// are one row per (provider, runtime) because detection is a repeated
+/// observation of the same fact; snapshots are append-only because a
+/// provider's reported capabilities genuinely change over time and
+/// `captured_at_millis` exists precisely to show that.
+const V4_PROVIDER_CAPABILITIES: &str = r#"
+CREATE TABLE provider_installations (
+    provider_json           TEXT NOT NULL,
+    runtime_json            TEXT NOT NULL,
+    installed               INTEGER NOT NULL,
+    executable_path         TEXT,
+    version                 TEXT,
+    detected_at_millis      INTEGER NOT NULL,
+    PRIMARY KEY (provider_json, runtime_json)
+);
+
+CREATE TABLE capability_snapshots (
+    id                      TEXT PRIMARY KEY,
+    provider_json           TEXT NOT NULL,
+    runtime_json            TEXT NOT NULL,
+    snapshot_json           TEXT NOT NULL,
+    captured_at_millis      INTEGER NOT NULL
+);
+
+CREATE INDEX idx_capability_snapshots_provider
+    ON capability_snapshots(provider_json, captured_at_millis);
+"#;
+
 pub(crate) fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(V1_INITIAL_SCHEMA),
         M::up(V2_CORRELATION_INDEXES),
         M::up(V3_WORKTREE_LEASES),
+        M::up(V4_PROVIDER_CAPABILITIES),
     ])
 }
 
@@ -137,8 +167,8 @@ mod tests {
         migrations().to_latest(&mut conn).unwrap();
         let version = migrations().current_version(&conn).unwrap();
         assert!(
-            matches!(version, SchemaVersion::Inside(n) if n.get() == 3),
-            "expected schema version 3, got {version:?}"
+            matches!(version, SchemaVersion::Inside(n) if n.get() == 4),
+            "expected schema version 4, got {version:?}"
         );
     }
 
@@ -169,11 +199,11 @@ mod tests {
         assert_eq!(value, "v");
         assert!(matches!(
             migrations().current_version(&conn).unwrap(),
-            SchemaVersion::Inside(n) if n.get() == 3
+            SchemaVersion::Inside(n) if n.get() == 4
         ));
 
         // And the V2 index must actually exist now -- proves V2 really
-        // ran, not just that current_version reports 3.
+        // ran, not just that current_version reports 4.
         let index_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_events_workflow_run_id'",
