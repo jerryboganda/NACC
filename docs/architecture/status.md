@@ -1,5 +1,31 @@
 # NACC implementation status and agent handoff
 
+## Full-roadmap sweep checkpoint — 2026-09-17 (phases 6–12 wave)
+
+This checkpoint covers the four commits after `2d75785`: `040c0c2` (engine IPC + Run Console), `0b506da` (Task D remainder), `a870434` (Phase 6 remainder), `20b9854` (Phases 8–11 crates). All local; nothing pushed. Read with the honesty rule in mind: **the phases are not "complete" in the S27 sense** — completion there means demonstrated acceptance evidence, and the items below that need live CLIs, a signing certificate, CI dispatch, or a clean machine are named, not waved through.
+
+## What is now implemented and locally verified
+
+- **Task D remainder (completes the Phase 7 engine):** per-node `timeout_secs` flowing to the executor; `cancel` now stops in-flight provider sessions through a new `NodeExecutor::cancel_attempt` (whole process tree dies; a late result can no longer overwrite a cancelled node); startup runs crash `recovery::reconcile`; workflow templates are durable, versioned data (storage V6) with all six S18 presets shipped (added frontend_visual_hardening, backend_security_change); optional per-run worktree leases wired end-to-end (allocate → routing pin → release/quarantine on finish or cancel).
+- **Phase 6 remainder:** capability-snapshot IPC (probe + persisted latest) with model-aware thinking/reasoning controls that stay disabled without a verified snapshot and refuse unlisted levels at save (S10.1); S11 account labels and per-row fallback chains (storage V7) used by the engine with the fallback recorded on the attempt; the Setup Wizard panel (prerequisites via git/gh, saved detections, sign-in verification, capability probes, read-only workspace check, starter disabled role rows, unwired steps listed in place).
+- **Phases 8–11 crates:** Antigravity S9.3 handoff schema + git/gate evidence cross-checks; OpenCode S9.5 gateway profiles + testable model discovery; the deterministic quality-gate runner (exact argv, exit-code verdicts, bounded evidence); structured review findings with the bounded-repair rule; the rule-based CI failure classifier; secret redaction (values + known token shapes) and the policy engine (protected paths, denied fragments, expiring danger grants that cannot punch through protected paths). `gh_version`/`gh_installed` landed for Phase 10.
+- **Phase 12:** docs/security/threat-model.md, docs/RELEASE-CHECKLIST.md, and ADR-0001 (why Antigravity/OpenCode launch stays typed-blocked — no invented contracts).
+
+Verified (GNU toolchain, final code state): nacc-domain 21, nacc-orchestrator 52, nacc-storage 52, nacc-app 15, nacc-worktree 21, quality/review/github/opencode/antigravity 26, secrets 3, policy 4 tests — all passing; `clippy --all-targets -D warnings` clean on every touched crate; bindings regenerated after each IPC change; frontend `npm run build` green and **28/28** Vitest tests (App 4, Providers 4, RoleMatrix 9, RunConsole 11).
+
+## The honest ledger against "all 12 phases"
+
+Implemented and locally verified: Phases 0–7 core (with S16 worktree isolation and crash recovery now actually wired), Phase 6's configuration surface, and the spec-grounded logic of Phases 8–11 as crates with tests.
+
+Requires real-world execution to be *demonstrated*, per S20/S27's own evidence rules — not missing code, but missing evidence:
+1. Live agent-CLI launches from the GUI (S27.5–8, the 20-step E2E) — needs installed, signed-in Claude/Codex CLIs and a human at the desk.
+2. MSVC/CI builds, the signed installer, and clean-machine smoke tests (S27.4, 31, 32, 39) — needs CI dispatch and a signing certificate, which are explicitly not authorized from this session.
+3. GitHub PR/Actions *live* visibility and repair-run creation (S27.23–26) — `gh` helpers and the classifier exist; live use needs a real repository + authenticated `gh`.
+4. Antigravity/OpenCode launch (Phase 8's execution half) — blocked on real headless CLIs existing at all (ADR-0001); everything with a known contract is implemented.
+5. Network egress allowlisting, Credential-Manager storage for NACC-owned secrets, and GUI pages for quality evidence/review findings — implemented as tested crates (redaction, gates, findings) but not yet wired into storage/IPC/GUI; named here so nobody mistakes them for done.
+
+No push, no CI dispatch, no release, no live provider launch was performed. The next session should start from the §20 demonstration script on a machine with real CLIs, then wire the crates above into storage/IPC/GUI in the order the acceptance criteria demand.
+
 ## Run Console IPC checkpoint — 2026-09-17
 
 The in-flight engine-wiring slice is committed locally (no push). This slice registers all nine workflow commands over typed IPC — `list_workflow_templates`, `start_workflow_run`, `get_workflow_run`, `list_workflow_runs`, `pause_workflow_run`, `cancel_workflow_run`, `resume_workflow_run`, `decide_workflow_approval`, `list_workflow_events` — so the Phase 7 engine, the Role Matrix routing snapshot, and the production `ProviderNodeExecutor` are reachable from the GUI. Every role-profile mutation (create/update/enable/delete) now refreshes the routing snapshot; a failed refresh is logged and never masks the already-succeeded storage write. A new Run Console panel starts runs against an explicit workspace, lists durable runs, opens a run's nodes/approvals/checkpoints, records approval decisions (decider required; rejection reason required, mirrored client-side), pauses/cancels with required reasons, blocks resume while an approval gate is open, and shows normalized events with their JSON payloads verbatim. Also committed here: the inherited `check_provider_auth` IPC and Providers-panel sign-in presence checks that were still uncommitted from the previous slice.
