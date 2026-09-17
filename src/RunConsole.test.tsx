@@ -22,6 +22,7 @@ import RunConsole from "./RunConsole";
 
 const template: WorkflowTemplateView = {
   name: "Explore then plan", description: "Reconnaissance followed by a plan.", node_keys: ["explore", "plan"],
+  version: 1, is_built_in: true,
 };
 const run: WorkflowRunView = {
   id: "run-1", project_id: "proj-1", template_name: "Explore then plan", state: "running",
@@ -45,9 +46,7 @@ const ok = <T,>(data: T) => ({ status: "ok", data });
 
 beforeEach(() => {
   vi.resetAllMocks();
-  // list_workflow_templates is a *sync* Rust command: no {status} wrapper,
-  // the bare array (see RunConsole.tsx's load()).
-  mocks.listWorkflowTemplates.mockResolvedValue([template]);
+  mocks.listWorkflowTemplates.mockResolvedValue(ok([template]));
   mocks.listWorkflowRuns.mockResolvedValue(ok([]));
   mocks.getWorkflowRun.mockResolvedValue(ok(snapshot));
   mocks.listWorkflowEvents.mockResolvedValue(ok([event]));
@@ -79,10 +78,15 @@ describe("Run Console", () => {
     await screen.findByRole("option", { name: "Explore then plan" });
     fireEvent.change(screen.getByLabelText("Project ID"), { target: { value: "proj-1" } });
     fireEvent.change(screen.getByLabelText("Workspace (absolute path)"), { target: { value: "D:\\repo" } });
+    fireEvent.change(
+      screen.getByLabelText(/Worktrees root \(optional/),
+      { target: { value: "D:\\repo-worktrees" } },
+    );
     fireEvent.click(screen.getByRole("button", { name: "Start run" }));
     await screen.findByTestId("run-state");
     expect(mocks.startWorkflowRun).toHaveBeenCalledExactlyOnceWith({
       project_id: "proj-1", template_name: "Explore then plan", workspace: "D:\\repo",
+      worktrees_root: "D:\\repo-worktrees",
     });
     expect(mocks.getWorkflowRun).toHaveBeenCalledWith({ run_id: "run-1" });
   });

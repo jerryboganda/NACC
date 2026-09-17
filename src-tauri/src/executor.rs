@@ -21,20 +21,21 @@
 //! `dyn AgentProvider` alone. On timeout the session is cancelled through the
 //! trait, so the contained process tree is torn down rather than abandoned.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use nacc_domain::RoleKind;
+use nacc_domain::{AttemptId, RoleKind, WorkflowRunId};
 use nacc_events::Event;
 use nacc_orchestrator::{
     NodeExecutionFailure, NodeExecutionOutcome, NodeExecutionRequest, NodeExecutor,
 };
 use nacc_provider_core::{
     AccountProfile, CancellationMode, EventSink, LaunchRequest, ProviderEvent, ProviderRegistry,
-    ResolvedAgentProfile, RuntimeLocation, RuntimeProfile,
+    ResolvedAgentProfile, RuntimeLocation, RuntimeProfile, SessionId,
 };
 
 use crate::routing::{RoleMatrixRouting, RoleSettings};
@@ -130,6 +131,11 @@ pub struct ProviderNodeExecutor {
     routing: Arc<RoleMatrixRouting>,
     storage: nacc_storage::Database,
     node_timeout: Duration,
+    /// The attempts currently executing, as `(provider, live session)` per
+    /// attempt id. This is what makes run cancellation mean "the agent's
+    /// process tree stops now" rather than "the durable state says cancelled
+    /// while the process keeps running" (master plan S13.4, acceptance 16).
+    in_flight: std::sync::Mutex<HashMap<AttemptId, (nacc_domain::ProviderId, SessionId)>>,
 }
 
 impl ProviderNodeExecutor {
@@ -143,6 +149,7 @@ impl ProviderNodeExecutor {
             routing,
             storage,
             node_timeout: DEFAULT_NODE_TIMEOUT,
+            in_flight: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -266,64 +273,116 @@ impl NodeExecutor for ProviderNodeExecutor {
             "node attempt running"
         );
 
-        let deadline = Instant::now() + self.node_timeout;
-        let mut summary = String::new();
+        let deadline = Instant::now() + request.timeout.unwrap_or(self.node_timeout);
+        let effective_timeout = deadline.saturating_duration_since(Instant::now()).as_secs();
 
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            match tokio::time::timeout(remaining, rx.recv()).await {
-                Err(_elapsed) => {
-                    // Cancel through the trait so the contained tree is torn
-                    // down; the failure is retryable because a slow node is
-                    // not a broken one.
-                    if let Err(err) = provider
-                        .cancel(&handle.session_id, CancellationMode::Forced)
-                        .await
-                    {
-                        tracing::warn!(
-                            session = %handle.session_id.0,
-                            error = %err,
-                            "cancelling a timed-out attempt failed"
-                        );
-                    }
-                    return Err(NodeExecutionFailure::retryable(format!(
-                        "attempt exceeded {}s and was cancelled",
-                        self.node_timeout.as_secs()
-                    )));
-                }
-                Ok(None) => {
-                    return Err(NodeExecutionFailure::retryable(
-                        "the provider event stream closed before a terminal event",
-                    ));
-                }
-                Ok(Some(event)) => {
-                    if let ProviderEvent::AssistantTextDelta { text } = &event {
-                        push_bounded(&mut summary, text);
-                    }
-                    self.record(&request, &event).await;
-                    match event {
-                        ProviderEvent::SessionCompleted => {
-                            return Ok(NodeExecutionOutcome {
-                                summary: if summary.trim().is_empty() {
-                                    "session completed with no assistant text".to_string()
-                                } else {
-                                    summary
-                                },
-                            });
+        // Registered as cancellable before the stream is awaited and
+        // deregistered on the single path below, so engine-driven
+        // cancellation reaches exactly the live sessions.
+        self.in_flight
+            .lock()
+            .expect("in-flight sessions poisoned")
+            .insert(request.attempt_id, (provider_id, handle.session_id.clone()));
+
+        let outcome = async {
+            let mut summary = String::new();
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                match tokio::time::timeout(remaining, rx.recv()).await {
+                    Err(_elapsed) => {
+                        // Cancel through the trait so the contained tree is torn
+                        // down; the failure is retryable because a slow node is
+                        // not a broken one.
+                        if let Err(err) = provider
+                            .cancel(&handle.session_id, CancellationMode::Forced)
+                            .await
+                        {
+                            tracing::warn!(
+                                session = %handle.session_id.0,
+                                error = %err,
+                                "cancelling a timed-out attempt failed"
+                            );
                         }
-                        ProviderEvent::SessionCancelled => {
-                            return Err(NodeExecutionFailure::permanent(
-                                "the provider session was cancelled",
-                            ));
+                        return Err(NodeExecutionFailure::retryable(format!(
+                            "attempt exceeded {effective_timeout}s and was cancelled"
+                        )));
+                    }
+                    Ok(None) => {
+                        return Err(NodeExecutionFailure::retryable(
+                            "the provider event stream closed before a terminal event",
+                        ));
+                    }
+                    Ok(Some(event)) => {
+                        if let ProviderEvent::AssistantTextDelta { text } = &event {
+                            push_bounded(&mut summary, text);
                         }
-                        ProviderEvent::TerminalError { message } => {
-                            return Err(NodeExecutionFailure::retryable(format!(
-                                "provider reported a terminal error: {message}"
-                            )));
+                        self.record(&request, &event).await;
+                        match event {
+                            ProviderEvent::SessionCompleted => {
+                                return Ok(NodeExecutionOutcome {
+                                    summary: if summary.trim().is_empty() {
+                                        "session completed with no assistant text".to_string()
+                                    } else {
+                                        summary
+                                    },
+                                });
+                            }
+                            ProviderEvent::SessionCancelled => {
+                                return Err(NodeExecutionFailure::permanent(
+                                    "the provider session was cancelled",
+                                ));
+                            }
+                            ProviderEvent::TerminalError { message } => {
+                                return Err(NodeExecutionFailure::retryable(format!(
+                                    "provider reported a terminal error: {message}"
+                                )));
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
+            }
+        }
+        .await;
+        self.in_flight
+            .lock()
+            .expect("in-flight sessions poisoned")
+            .remove(&request.attempt_id);
+        outcome
+    }
+
+    /// Stop one in-flight attempt by killing its provider session's whole
+    /// process tree. Forced, not graceful: a cancelled run is not asked
+    /// nicely (master plan S13.4). `false` means the attempt had already
+    /// finished -- nothing left to stop -- or the cancellation itself failed;
+    /// either way it is logged and the engine's durable state stands.
+    async fn cancel_attempt(&self, _run_id: WorkflowRunId, attempt_id: AttemptId) -> bool {
+        let claimed = self
+            .in_flight
+            .lock()
+            .expect("in-flight sessions poisoned")
+            .remove(&attempt_id);
+        let Some((provider_id, session)) = claimed else {
+            return false;
+        };
+        let Ok(provider) = self.providers.require(provider_id).map(Arc::clone) else {
+            return false;
+        };
+        match provider.cancel(&session, CancellationMode::Forced).await {
+            Ok(()) => {
+                tracing::info!(
+                    session = session.0,
+                    "cancelled an in-flight attempt's provider session"
+                );
+                true
+            }
+            Err(err) => {
+                tracing::warn!(
+                    session = session.0,
+                    error = %err,
+                    "cancelling an in-flight attempt's provider session failed"
+                );
+                false
             }
         }
     }

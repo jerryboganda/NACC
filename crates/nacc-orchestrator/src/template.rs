@@ -39,6 +39,7 @@ fn node(
         permission_profile_hint: PermissionProfile::AutonomousWorktree,
         retryable: true,
         requires_approval: false,
+        timeout_secs: None,
         fallbacks: vec![],
     }
 }
@@ -330,12 +331,167 @@ pub fn read_only_audit() -> WorkflowTemplate {
     }
 }
 
-/// The presets NACC ships, in the order the UI lists them.
+/// Frontend Visual Hardening (master plan S18.4): explore the UI, implement,
+/// check the responsive/browser matrix and accessibility, review
+/// independently, then integrate behind an approval gate.
+pub fn frontend_visual_hardening() -> WorkflowTemplate {
+    WorkflowTemplate {
+        name: "frontend_visual_hardening".to_string(),
+        description:
+            "Harden the user-facing surfaces: implement in an isolated worktree, check the \
+             responsive/browser matrix and accessibility, review with fresh eyes, then integrate."
+                .to_string(),
+        nodes: vec![
+            readonly_node(
+                "explore_ui",
+                "Explore the UI surfaces",
+                RoleKind::RepositoryExplorer,
+                &[],
+                "Map the user-facing components and routes: what renders them, what state they \
+                 depend on, and where their styles live. Name the surfaces the change will touch.",
+            ),
+            node(
+                "implement",
+                "Implement the change",
+                RoleKind::FrontendImplementer,
+                &["explore_ui"],
+                "Implement the visual change in this isolated worktree. Keep the component API \
+                 stable unless the plan says otherwise, and commit locally when coherent.",
+            ),
+            node(
+                "visual_matrix",
+                "Responsive/browser matrix checks",
+                RoleKind::TestEngineer,
+                &["implement"],
+                "Run the project's visual checks (Playwright or the repository's own harness) \
+                 across the declared breakpoints and browsers. Report exact commands and exact \
+                 results, including screenshots' paths. Do not summarize a failure as a pass.",
+            ),
+            readonly_node(
+                "accessibility_review",
+                "Accessibility review",
+                RoleKind::AccessibilityUxReviewer,
+                &["implement"],
+                "Review the changed surfaces for accessibility: keyboard reachability, focus \
+                 order, labels and roles, contrast, and state that is shown but not operable. \
+                 Report findings as component plus concrete failure scenario.",
+            ),
+            readonly_node(
+                "review",
+                "Independent UI review",
+                RoleKind::GeneralCodeReviewer,
+                &["visual_matrix", "accessibility_review"],
+                "Review the diff with fresh eyes against the matrix and accessibility findings. \
+                 Use a different provider than the implementer used.",
+            ),
+            WorkflowNode {
+                // Integration writes to the repository: always gated (S12.2).
+                requires_approval: true,
+                permission_profile_hint: PermissionProfile::RepositoryMaintainer,
+                ..node(
+                    "integrate",
+                    "Integrate the change",
+                    RoleKind::Integrator,
+                    &["review"],
+                    "Merge the reviewed worktree branch serially. CI runs after integration; \
+                     this step is the human gate in front of that.",
+                )
+            },
+        ],
+    }
+}
+
+/// Backend Security Change (master plan S18.5): threat-first exploration,
+/// implementation, migration and security review, deterministic tests, then
+/// integration behind an approval gate.
+pub fn backend_security_change() -> WorkflowTemplate {
+    WorkflowTemplate {
+        name: "backend_security_change".to_string(),
+        description:
+            "Make a security-relevant backend change: threat notes first, implementation in an \
+             isolated worktree, migration and security review, deterministic tests, then \
+             integrate."
+                .to_string(),
+        nodes: vec![
+            readonly_node(
+                "explore_security",
+                "Explore the trust boundaries",
+                RoleKind::RepositoryExplorer,
+                &[],
+                "Map the surfaces the change touches: inputs and their trust level, credential \
+                 handling, privileged operations, and the existing tests that cover them.",
+            ),
+            readonly_node(
+                "threat_notes",
+                "Write threat notes",
+                RoleKind::ArchitectPlanner,
+                &["explore_security"],
+                "Name the threats the change must not introduce (injection, confused deputy, \
+                 privilege escalation, secret exposure) and the invariant each mitigation \
+                 preserves. The implementation is checked against these notes.",
+            ),
+            node(
+                "implement",
+                "Implement the change",
+                RoleKind::BackendImplementer,
+                &["threat_notes"],
+                "Implement the change in this isolated worktree, satisfying every invariant in \
+                 the threat notes. Add the tests that would fail if an invariant regressed.",
+            ),
+            readonly_node(
+                "review_migration",
+                "Database/migration review",
+                RoleKind::DatabaseMigrationImplementer,
+                &["implement"],
+                "Review any schema or data migration for reversibility, locking, and data loss. \
+                 If there is no migration, say so explicitly rather than reviewing nothing.",
+            ),
+            readonly_node(
+                "review_security",
+                "Security review",
+                RoleKind::SecurityReviewer,
+                &["implement"],
+                "Review the diff against the threat notes. Every named threat needs either a \
+                 mitigation or an explicit, justified non-issue. Report findings as file:line \
+                 plus a concrete abuse scenario.",
+            ),
+            node(
+                "tests",
+                "Deterministic tests",
+                RoleKind::TestEngineer,
+                &["review_migration", "review_security"],
+                "Run the unit, integration, and authorization tests against this worktree and \
+                 report exact commands and exact results. Do not summarize a failure as a pass.",
+            ),
+            WorkflowNode {
+                // Integration writes to the repository: always gated (S12.2);
+                // CI runs after it, which is the next stage outside this DAG.
+                requires_approval: true,
+                permission_profile_hint: PermissionProfile::RepositoryMaintainer,
+                ..node(
+                    "integrate",
+                    "Integrate the change",
+                    RoleKind::Integrator,
+                    &["tests"],
+                    "Merge the reviewed worktree branch serially so CI can run on it. This step \
+                     is the human gate in front of CI.",
+                )
+            },
+        ],
+    }
+}
+
+/// The presets NACC ships, in the order the UI lists them. All six master
+/// plan S18 subsections are here: fast_bug_fix (S18.2), ci_cd_repair
+/// (S18.3), enterprise_feature (S18.1), frontend_visual_hardening (S18.4),
+/// backend_security_change (S18.5), and read_only_audit (S18.6).
 pub fn built_in_templates() -> Vec<WorkflowTemplate> {
     vec![
         fast_bug_fix(),
         ci_cd_repair(),
         enterprise_feature(),
+        frontend_visual_hardening(),
+        backend_security_change(),
         read_only_audit(),
     ]
 }

@@ -21,7 +21,7 @@ use std::sync::RwLock;
 
 use nacc_domain::{
     ModelId, PermissionProfile, ProjectId, ProviderId, ReasoningLevel, RoleKind, RoleProfile,
-    ThinkingMode,
+    ThinkingMode, WorkflowRunId,
 };
 use nacc_orchestrator::{engine::role_key, RoleRouting};
 
@@ -51,6 +51,11 @@ pub struct RoleMatrixRouting {
     /// run starts. A worktree lease replaces this once allocation exists;
     /// until then nothing is ever run in an implicitly-guessed directory.
     workspaces: RwLock<HashMap<ProjectId, PathBuf>>,
+    /// Where one specific run's agents work: a leased worktree path, set at
+    /// `start_workflow_run` when worktree isolation was requested. Overrides
+    /// the per-project directory so every node of that run works in the same
+    /// isolated tree and the primary checkout is never touched.
+    run_workspaces: RwLock<HashMap<WorkflowRunId, PathBuf>>,
 }
 
 impl RoleMatrixRouting {
@@ -87,6 +92,32 @@ impl RoleMatrixRouting {
             .unwrap_or_else(|e| e.into_inner())
             .get(&project_id)
             .cloned()
+    }
+
+    /// Pin one run to an explicit workspace (a leased worktree). While set,
+    /// it wins over the per-project directory for that run only.
+    pub fn set_run_workspace(&self, run_id: WorkflowRunId, path: impl Into<PathBuf>) {
+        self.run_workspaces
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(run_id, path.into());
+    }
+
+    pub fn run_workspace_for(&self, run_id: WorkflowRunId) -> Option<PathBuf> {
+        self.run_workspaces
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&run_id)
+            .cloned()
+    }
+
+    /// Drop a run's workspace override -- called when its lease is released,
+    /// so a finished run's path cannot outlive its worktree.
+    pub fn clear_run_workspace(&self, run_id: WorkflowRunId) {
+        self.run_workspaces
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&run_id);
     }
 
     pub fn settings_for(&self, role: &RoleKind) -> Option<RoleSettings> {
@@ -166,10 +197,11 @@ impl RoleRouting for RoleMatrixRouting {
     fn workspace_for(
         &self,
         project_id: ProjectId,
-        _run_id: nacc_domain::WorkflowRunId,
+        run_id: nacc_domain::WorkflowRunId,
         _node_key: &str,
     ) -> Option<PathBuf> {
-        self.workspace_for_project(project_id)
+        self.run_workspace_for(run_id)
+            .or_else(|| self.workspace_for_project(project_id))
     }
 }
 

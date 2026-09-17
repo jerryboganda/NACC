@@ -44,6 +44,18 @@ pub struct AppState {
     /// The durable workflow engine (Phase 7), wired into the application so
     /// real runs can be started and resumed.
     pub engine: std::sync::Arc<nacc_orchestrator::WorkflowEngine>,
+    /// Worktree lease management for this process: allocation, inspection,
+    /// release, and quarantine of per-run worktrees (master plan S16).
+    pub worktrees: std::sync::Arc<nacc_worktree::WorktreeManager>,
+    /// Run id -> the lease allocated for it in this session. The durable
+    /// lease rows in storage are the source of truth (startup reconciliation
+    /// reads those); this map exists so a run that finishes or is cancelled
+    /// while NACC is open releases its worktree promptly.
+    pub run_leases: std::sync::Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<nacc_domain::WorkflowRunId, nacc_domain::WorktreeLease>,
+        >,
+    >,
     /// Must outlive the app for the non-blocking file log writer to keep
     /// flushing -- see `nacc_observability::init_tracing`'s doc comment.
     _tracing_guard: tracing_appender::non_blocking::WorkerGuard,
@@ -75,6 +87,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         workflows::resume_workflow_run,
         workflows::decide_workflow_approval,
         workflows::list_workflow_events,
+        workflows::save_workflow_template,
+        workflows::delete_workflow_template,
     ])
 }
 
@@ -184,6 +198,14 @@ pub fn run() {
                 executor,
                 routing.clone(),
             ));
+            // The worktree manager shares storage (durable lease rows) and is
+            // tagged with this process id, which is how a later start can
+            // tell "still running" from "orphaned by a crash" (master plan
+            // S16's reconciliation rule).
+            let worktrees = std::sync::Arc::new(
+                nacc_worktree::WorktreeManager::new(storage.clone())
+                    .with_owner_process_id(std::process::id()),
+            );
 
             // Load the persisted Role Matrix into the routing snapshot. Done as
             // a task rather than inline because storage is async and `.setup()`
@@ -203,12 +225,99 @@ pub fn run() {
                 });
             }
 
+            // Crash recovery (master plan S14.6, S16): runs left `Running` or
+            // `AwaitingApproval` by a previous process become explicit,
+            // resumable `Interrupted` runs with their unfinished attempts
+            // closed. Never auto-resumes -- the user decides, from a state
+            // that tells the truth about the crash instead of pretending
+            // nothing happened.
+            {
+                let engine = engine.clone();
+                tauri::async_runtime::spawn(async move {
+                    match nacc_orchestrator::recovery::reconcile(&engine).await {
+                        Ok(recovered) if recovered.is_empty() => {
+                            tracing::info!("startup recovery found no interrupted runs");
+                        }
+                        Ok(recovered) => {
+                            for run in recovered {
+                                tracing::info!(
+                                    run = %run.run_id,
+                                    requeued_nodes = run.requeued_nodes,
+                                    "startup recovery reconciled an interrupted run"
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            tracing::error!(error = %err, "startup recovery failed");
+                        }
+                    }
+                });
+            }
+
+            // Sync the built-in template catalog (S24 Phase 7's "versioned
+            // DAG templates"): the code is the upstream truth for presets,
+            // storage is the catalog the GUI reads. A content change in a
+            // build bumps the stored version; unchanged presets are left
+            // exactly as they are.
+            {
+                let storage = storage.clone();
+                tauri::async_runtime::spawn(async move {
+                    for template in nacc_orchestrator::built_in_templates() {
+                        let name = template.name.clone();
+                        let existing = match storage.get_workflow_template(&name).await {
+                            Ok(existing) => existing,
+                            Err(err) => {
+                                tracing::error!(
+                                    template = %name,
+                                    error = %err,
+                                    "reading a stored template failed"
+                                );
+                                continue;
+                            }
+                        };
+                        if let Some(current) = &existing {
+                            if current.is_built_in
+                                && current.description == template.description
+                                && current.definition == template
+                            {
+                                continue;
+                            }
+                        }
+                        let now = now_millis();
+                        let (version, created_at_millis) = existing
+                            .map(|current| (current.version + 1, current.created_at_millis))
+                            .unwrap_or((1, now));
+                        let record = nacc_storage::WorkflowTemplateRecord {
+                            name,
+                            description: template.description.clone(),
+                            version,
+                            is_built_in: true,
+                            definition: template,
+                            created_at_millis,
+                            updated_at_millis: now,
+                        };
+                        if let Err(err) = storage.upsert_workflow_template(&record).await {
+                            tracing::error!(
+                                template = %record.name,
+                                error = %err,
+                                "syncing a built-in template failed"
+                            );
+                        }
+                    }
+                    tracing::info!("built-in workflow templates synced");
+                });
+            }
+
             app.manage(AppState {
                 diagnostics_run_id,
                 storage,
                 providers,
                 routing,
                 engine,
+                worktrees,
+                run_leases: std::sync::Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
                 _tracing_guard: guard,
             });
 

@@ -44,9 +44,11 @@ mod migrations;
 mod providers;
 mod role_profiles;
 mod settings;
+mod templates;
 mod workflow;
 mod worktree_leases;
 
+pub use templates::WorkflowTemplateRecord;
 pub use workflow::{
     ApprovalRecord, CheckpointRecord, NodeAttemptRecord, NodeRunRecord, WorkflowRunRecord,
 };
@@ -84,6 +86,8 @@ pub enum StorageError {
     AttemptNotFound(nacc_domain::AttemptId),
     #[error("approval {0} is not pending (it was already decided)")]
     ApprovalNotPending(nacc_domain::ApprovalId),
+    #[error("workflow template `{0}` is built in and cannot be replaced or deleted from the GUI")]
+    BuiltinTemplateProtected(String),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;

@@ -121,6 +121,10 @@ pub struct NodeExecutionRequest {
     /// Where the agent should work (a leased worktree, master plan S16). The
     /// executor allocates and releases it; the engine only carries it.
     pub workspace: Option<PathBuf>,
+    /// The node's declared ceiling for one attempt. `None` lets the executor
+    /// apply its default; a declared value is a per-node product decision,
+    /// not a global guess (master plan S14's node contracts).
+    pub timeout: Option<Duration>,
     /// Why a declared fallback was taken, when one was.
     pub fallback_reason: Option<String>,
 }
@@ -165,6 +169,16 @@ pub trait NodeExecutor: Send + Sync {
         &self,
         request: NodeExecutionRequest,
     ) -> std::result::Result<NodeExecutionOutcome, NodeExecutionFailure>;
+
+    /// Best-effort abort of one in-flight attempt. `false` means "this
+    /// executor cannot cancel (or the attempt is already gone)" -- the
+    /// default, so simple executors stay valid. The production executor
+    /// kills the provider session's whole process tree through the adapter
+    /// (master plan S13.4): without this, "cancelled" would be a durable
+    /// state while the agent keeps running to completion.
+    async fn cancel_attempt(&self, _run_id: WorkflowRunId, _attempt_id: AttemptId) -> bool {
+        false
+    }
 }
 
 /// Resolves a role to a provider, a model, a permission ceiling, and a
@@ -419,6 +433,13 @@ pub struct WorkflowEngine {
     /// Signalled whenever a concurrency slot is released, so a dispatch that
     /// found every slot taken can wake promptly instead of spinning.
     slot_freed: Notify,
+    /// Attempt id -> owning run id, for exactly the attempts currently
+    /// executing. This is the engine's half of cancellation: `cancel` uses it
+    /// to reach the executor and stop the in-flight provider sessions, so a
+    /// cancelled run does not keep burning tokens to a result nobody will
+    /// read. In-memory by nature -- an attempt that survives a crash is what
+    /// recovery reconciles, not what this map tracks.
+    in_flight_attempts: Arc<Mutex<HashMap<AttemptId, WorkflowRunId>>>,
 }
 
 impl WorkflowEngine {
@@ -438,6 +459,7 @@ impl WorkflowEngine {
             governor: Mutex::new(Governor::new(config.limits)),
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
             slot_freed: Notify::new(),
+            in_flight_attempts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -635,6 +657,34 @@ impl WorkflowEngine {
                 &format!("cancelled: {reason}"),
             )
             .await?;
+
+        // The durable state now says cancelled; make the world match it.
+        // Best-effort per attempt -- an executor that cannot cancel, or an
+        // attempt that already finished, simply reports that -- but a
+        // production executor kills the session's whole process tree here,
+        // which is what "cancel" has to mean for a desktop app (S13.4):
+        // without this, a cancelled run would keep burning tokens toward a
+        // result nobody will read.
+        let running: Vec<AttemptId> = {
+            let map = self
+                .in_flight_attempts
+                .lock()
+                .expect("in-flight attempts poisoned");
+            map.iter()
+                .filter(|(_, rid)| **rid == run_id)
+                .map(|(aid, _)| *aid)
+                .collect()
+        };
+        for attempt_id in running {
+            if !self.executor.cancel_attempt(run_id, attempt_id).await {
+                tracing::warn!(
+                    run = %run_id,
+                    attempt = %attempt_id,
+                    "executor could not cancel an in-flight attempt"
+                );
+            }
+        }
+
         self.snapshot(run_id).await
     }
 
@@ -1036,6 +1086,7 @@ impl WorkflowEngine {
                 let routing = self.routing.clone();
                 let retry = self.config.retry;
                 let cooldowns = self.cooldowns.clone();
+                let in_flight = self.in_flight_attempts.clone();
                 let run = snapshot.run.clone();
                 let provider = self.routing.provider_for(&node.role);
                 let key = SlotKey::new(snapshot.run.project_id, provider);
@@ -1072,6 +1123,7 @@ impl WorkflowEngine {
                         routing,
                         retry,
                         cooldowns,
+                        in_flight,
                         run,
                         node,
                         trigger,
@@ -1176,6 +1228,7 @@ async fn run_attempt(
     routing: Arc<dyn RoleRouting>,
     retry: RetryPolicy,
     cooldowns: Arc<Mutex<HashMap<String, u64>>>,
+    in_flight: Arc<Mutex<HashMap<AttemptId, WorkflowRunId>>>,
     run: WorkflowRunRecord,
     node: WorkflowNode,
     trigger: AttemptTrigger,
@@ -1278,10 +1331,41 @@ async fn run_attempt(
         provider_id: Some(provider_id),
         model_id,
         workspace,
+        timeout: node.timeout_secs.map(|secs| Duration::from_secs(u64::from(secs))),
         fallback_reason,
     };
 
-    match executor.execute(request).await {
+    // Register the attempt as cancellable before launching and deregister on
+    // the single exit path below, so `cancel` reaches exactly the live
+    // sessions -- no window where a finishing attempt is still listed, no
+    // attempt that cannot be reached.
+    in_flight
+        .lock()
+        .expect("in-flight attempts poisoned")
+        .insert(attempt_id, run.id);
+    let outcome = executor.execute(request).await;
+    in_flight
+        .lock()
+        .expect("in-flight attempts poisoned")
+        .remove(&attempt_id);
+
+    // A cancel that landed while the attempt was in flight already wrote the
+    // durable node state. The late result must not overwrite it -- a cancelled
+    // node must not come back as "failed" or "pending" because its orphaned
+    // attempt finally reported. The attempt row still records what actually
+    // happened; only the node-level state stays as the cancellation left it.
+    let overtaken = matches!(
+        persistence
+            .db
+            .list_node_runs(run.id)
+            .await?
+            .into_iter()
+            .find(|record| record.id == snapshot_node.id)
+            .map(|record| record.state),
+        Some(NodeState::Cancelled) | Some(NodeState::Skipped)
+    );
+
+    match outcome {
         Ok(outcome) => {
             let finished_at = persistence.clock.now_millis();
             persistence
@@ -1293,6 +1377,14 @@ async fn run_attempt(
                     finished_at,
                 )
                 .await?;
+            if overtaken {
+                tracing::warn!(
+                    run = %run.id,
+                    node = %node.key,
+                    "attempt succeeded after its run was cancelled; node state left as cancelled"
+                );
+                return Ok(());
+            }
             let mut succeeded = running.clone();
             succeeded.state = NodeState::Succeeded;
             succeeded.last_detail = Some(outcome.summary);
@@ -1310,6 +1402,14 @@ async fn run_attempt(
                 .db
                 .finish_node_attempt(attempt_id, NodeState::Failed, &failure.detail, finished_at)
                 .await?;
+            if overtaken {
+                tracing::warn!(
+                    run = %run.id,
+                    node = %node.key,
+                    "attempt failed after its run was cancelled; node state left as cancelled"
+                );
+                return Ok(());
+            }
             let attempts_exhausted = attempt_number >= retry.max_attempts;
             let will_retry = failure.retryable && node.retryable && !attempts_exhausted;
             let mut updated = running.clone();

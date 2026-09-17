@@ -604,7 +604,7 @@ pub enum AttemptTrigger {
 /// serve the request. Empty means "no fallback declared" -- which is a real
 /// answer, not a missing one: the run then fails visibly instead of
 /// silently switching providers.
-#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize, specta::Type)]
 pub struct NodeFallback {
     pub provider_id: ProviderId,
     pub model_id: Option<ModelId>,
@@ -613,7 +613,7 @@ pub struct NodeFallback {
 }
 
 /// One node of a workflow template (master plan S14.2's DAG).
-#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize, specta::Type)]
 pub struct WorkflowNode {
     /// Stable within a template; what `depends_on` and the UI refer to.
     pub key: String,
@@ -633,12 +633,19 @@ pub struct WorkflowNode {
     /// Requires a recorded human approval before it runs (S12.2's
     /// always-approval-gated operations).
     pub requires_approval: bool,
+    /// Ceiling for one attempt of this node, in seconds. `None` means the
+    /// executor's own default applies -- the declaration is per node because
+    /// a quick review step and a long implementation step have genuinely
+    /// different natural durations (master plan S14's node contracts). `u32`
+    /// because specta refuses pointer-width integers across IPC.
+    #[serde(default)]
+    pub timeout_secs: Option<u32>,
     pub fallbacks: Vec<NodeFallback>,
 }
 
 /// A named DAG, before it is instantiated as a run. Master plan S18's
 /// presets are built from this type.
-#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize, specta::Type)]
 pub struct WorkflowTemplate {
     pub name: String,
     pub description: String,
@@ -801,6 +808,7 @@ mod canonical_control_tests {
                 permission_profile_hint: PermissionProfile::ReadOnly,
                 retryable: true,
                 requires_approval: false,
+                timeout_secs: None,
                 fallbacks: vec![NodeFallback {
                     provider_id: ProviderId::Codex,
                     model_id: None,

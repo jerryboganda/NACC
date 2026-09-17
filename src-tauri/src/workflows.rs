@@ -11,11 +11,14 @@
 //! real interrupted run that recovery can explain, not an in-memory ghost.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::State;
 
-use nacc_domain::{ApprovalDecision, ApprovalId, ProjectId, RunState, WorkflowRunId};
+use nacc_domain::{
+    ApprovalDecision, ApprovalId, ProjectId, RunState, WorkflowRunId, WorkflowTemplate,
+};
 use nacc_orchestrator::{built_in_template, built_in_templates, RunSnapshot};
-use nacc_storage::{CheckpointRecord, NodeRunRecord, WorkflowRunRecord};
+use nacc_storage::{CheckpointRecord, NodeRunRecord, WorkflowRunRecord, WorkflowTemplateRecord};
 
 use crate::AppState;
 
@@ -37,6 +40,27 @@ pub struct WorkflowTemplateView {
     pub name: String,
     pub description: String,
     pub node_keys: Vec<String>,
+    /// Storage edition of this graph; advances when the definition changes.
+    pub version: u32,
+    /// Built-in presets are protected: the GUI can run them but never
+    /// replace or delete them.
+    pub is_built_in: bool,
+}
+
+fn template_view(
+    name: &str,
+    description: &str,
+    nodes: &[nacc_domain::WorkflowNode],
+    version: u32,
+    is_built_in: bool,
+) -> WorkflowTemplateView {
+    WorkflowTemplateView {
+        name: name.to_string(),
+        description: description.to_string(),
+        node_keys: nodes.iter().map(|node| node.key.clone()).collect(),
+        version,
+        is_built_in,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, specta::Type)]
@@ -198,6 +222,11 @@ pub struct StartRunArgs {
     /// implicit working directory is how an agent ends up writing somewhere
     /// nobody asked for.
     pub workspace: String,
+    /// Absolute path to a directory under which a fresh git worktree lease
+    /// is allocated for this run (master plan S16). When set, every node of
+    /// the run works in that isolated worktree and the primary checkout is
+    /// never touched. `None` runs directly in `workspace`.
+    pub worktrees_root: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, specta::Type)]
@@ -228,31 +257,246 @@ pub struct DecideApprovalArgs {
     pub resume_after: bool,
 }
 
-#[tauri::command]
-#[specta::specta]
-pub fn list_workflow_templates() -> Vec<WorkflowTemplateView> {
-    built_in_templates()
-        .into_iter()
-        .map(|template| WorkflowTemplateView {
-            name: template.name,
-            description: template.description,
-            node_keys: template.nodes.into_iter().map(|node| node.key).collect(),
-        })
-        .collect()
-}
-
 /// Drive a run in the background. Returns nothing: the caller already has the
 /// run's durable state, and the run's progress is observed by reading it back
-/// (so the GUI never depends on a single long IPC call staying alive).
+/// (so the GUI never depends on a single long IPC call staying alive). When
+/// the run reaches a terminal state in this session, its worktree lease (if
+/// any) is released -- best-effort, never changing the run's own state.
 fn drive_in_background(state: &AppState, run_id: WorkflowRunId) {
     let engine = state.engine.clone();
+    let worktrees = state.worktrees.clone();
+    let leases = state.run_leases.clone();
+    let routing = state.routing.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(err) = engine.run(run_id).await {
+        let result = engine.run(run_id).await;
+        if let Ok(snapshot) = &result {
+            if snapshot.is_finished() {
+                release_run_lease(&worktrees, &leases, &routing, run_id).await;
+            }
+        }
+        if let Err(err) = result {
             // Reported, not swallowed: a run that cannot advance is exactly
             // what the operator needs to see.
             tracing::error!(run = %run_id, error = %err, "driving a workflow run failed");
         }
     });
+}
+
+/// Release a run's worktree lease and drop its routing override. Clean trees
+/// are removed; anything preserved is quarantined by the worktree crate's
+/// own release policy rather than destroyed (master plan S16). A failure
+/// here leaves the durable lease row for startup reconciliation -- it never
+/// blocks or rewrites the run.
+pub(crate) async fn release_run_lease(
+    worktrees: &nacc_worktree::WorktreeManager,
+    leases: &std::sync::Mutex<HashMap<WorkflowRunId, nacc_domain::WorktreeLease>>,
+    routing: &crate::routing::RoleMatrixRouting,
+    run_id: WorkflowRunId,
+) {
+    let lease = leases.lock().expect("run leases poisoned").remove(&run_id);
+    routing.clear_run_workspace(run_id);
+    let Some(lease) = lease else { return };
+    let repo = match nacc_git::GitRepository::open(&lease.path).await {
+        Ok(repo) => repo,
+        Err(err) => {
+            tracing::warn!(
+                lease = %lease.id,
+                error = %err,
+                "could not reopen a finished run's worktree for release; leaving it to reconciliation"
+            );
+            return;
+        }
+    };
+    match worktrees
+        .release(&repo, &lease, nacc_worktree::ReleasePolicy::RemoveIfSafe)
+        .await
+    {
+        Ok(report) => {
+            tracing::info!(
+                lease = %lease.id,
+                outcome = ?report.outcome,
+                "released a finished run's worktree lease"
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                lease = %lease.id,
+                error = %err,
+                "releasing a finished run's worktree lease failed; the durable lease row stays for reconciliation"
+            );
+        }
+    }
+}
+
+/// Allocate a git worktree lease for a whole run (master plan S16): one
+/// worktree off the chosen repository, every node of the run working inside
+/// it. The base is the repository's current branch; the worktree crate
+/// records the exact commit, which is what drift detection compares against.
+async fn allocate_run_worktree(
+    state: &AppState,
+    snapshot: &RunSnapshot,
+    template_name: &str,
+    workspace: &std::path::Path,
+    root: &std::path::Path,
+) -> Result<nacc_domain::WorktreeLease, String> {
+    let repo = nacc_git::GitRepository::open(workspace)
+        .await
+        .map_err(|e| format!("the workspace is not a git repository: {e}"))?;
+    let base = repo
+        .current_branch()
+        .await
+        .unwrap_or_else(|_| "HEAD".to_string());
+    state
+        .worktrees
+        .allocate(
+            &repo,
+            nacc_worktree::AllocateRequest {
+                project_id: snapshot.run.project_id,
+                workflow_run_id: Some(snapshot.run.id),
+                node_run_id: None,
+                label: template_name.to_string(),
+                base,
+                worktrees_root: root.to_path_buf(),
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn list_workflow_templates(
+    state: State<'_, AppState>,
+) -> Result<Vec<WorkflowTemplateView>, String> {
+    let records = state
+        .storage
+        .list_workflow_templates()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !records.is_empty() {
+        return Ok(records
+            .iter()
+            .map(|record| {
+                template_view(
+                    &record.name,
+                    &record.description,
+                    &record.definition.nodes,
+                    record.version,
+                    record.is_built_in,
+                )
+            })
+            .collect());
+    }
+    // The startup sync has not landed yet (a fresh database whose sync task
+    // is still queued). Fall back to the code-defined presets rather than
+    // showing an empty catalog, which would lie about what this build runs.
+    Ok(built_in_templates()
+        .iter()
+        .map(|template| {
+            template_view(
+                &template.name,
+                &template.description,
+                &template.nodes,
+                1,
+                true,
+            )
+        })
+        .collect())
+}
+
+/// Create or update a *custom* workflow template. The DAG is validated
+/// before it is stored, so a graph that could never run cannot even be
+/// saved; built-in names are refused because presets are the product's own
+/// contract with the user.
+#[tauri::command]
+#[specta::specta]
+pub async fn save_workflow_template(
+    args: SaveTemplateArgs,
+    state: State<'_, AppState>,
+) -> Result<WorkflowTemplateView, String> {
+    let name = args.name.trim();
+    if name.is_empty() {
+        return Err("template name must not be empty".to_string());
+    }
+    if built_in_template(name).is_some() {
+        return Err(format!(
+            "`{name}` is a built-in preset; save custom templates under a different name"
+        ));
+    }
+    if args.nodes.is_empty() {
+        return Err("a template needs at least one node".to_string());
+    }
+    for node in &args.nodes {
+        if node.key.trim().is_empty() {
+            return Err("every node needs a key".to_string());
+        }
+        if node.instruction.trim().is_empty() {
+            return Err(format!("node `{}` needs an instruction", node.key));
+        }
+    }
+    nacc_orchestrator::scheduler::validate(&args.nodes).map_err(|e| e.to_string())?;
+
+    let description = args.description.trim().to_string();
+    let version = state
+        .storage
+        .next_workflow_template_version(name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let now = crate::now_millis();
+    let record = WorkflowTemplateRecord {
+        name: name.to_string(),
+        description: description.clone(),
+        version,
+        is_built_in: false,
+        definition: WorkflowTemplate {
+            name: name.to_string(),
+            description: description.clone(),
+            nodes: args.nodes,
+        },
+        created_at_millis: now,
+        updated_at_millis: now,
+    };
+    state
+        .storage
+        .upsert_workflow_template(&record)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(template_view(
+        &record.name,
+        &record.description,
+        &record.definition.nodes,
+        record.version,
+        record.is_built_in,
+    ))
+}
+
+#[derive(Clone, Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct SaveTemplateArgs {
+    pub name: String,
+    pub description: String,
+    pub nodes: Vec<nacc_domain::WorkflowNode>,
+}
+
+#[derive(Clone, Debug, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateNameArgs {
+    pub name: String,
+}
+
+/// Delete a *custom* template. Built-ins refuse with a typed error: the
+/// presets are part of what NACC ships.
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_workflow_template(
+    args: TemplateNameArgs,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    state
+        .storage
+        .delete_workflow_template(&args.name)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -261,28 +505,76 @@ pub async fn start_workflow_run(
     args: StartRunArgs,
     state: State<'_, AppState>,
 ) -> Result<RunSnapshotView, String> {
-    let template = built_in_template(&args.template_name).ok_or_else(|| {
-        let available: Vec<String> = built_in_templates()
-            .into_iter()
-            .map(|template| template.name)
-            .collect();
-        format!(
-            "unknown workflow template `{}`; available: {}",
-            args.template_name,
-            available.join(", ")
-        )
-    })?;
+    // Stored templates first (custom graphs and synced built-ins); the
+    // code-defined preset lookup is the fallback for a database that has not
+    // received the startup sync yet. Both names share one namespace.
+    let template = match state
+        .storage
+        .get_workflow_template(&args.template_name)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        Some(record) => record.definition,
+        None => built_in_template(&args.template_name).ok_or_else(|| {
+            let available: Vec<String> = built_in_templates()
+                .into_iter()
+                .map(|template| template.name)
+                .collect();
+            format!(
+                "unknown workflow template `{}`; available: {}",
+                args.template_name,
+                available.join(", ")
+            )
+        })?,
+    };
 
     let workspace = crate::routing::RoleMatrixRouting::validate_workspace(std::path::Path::new(
         &args.workspace,
     ))?;
-    state.routing.set_workspace(args.project_id, workspace);
+    state
+        .routing
+        .set_workspace(args.project_id, workspace.clone());
 
     let snapshot = state
         .engine
         .start_run(args.project_id, &template)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Worktree isolation (master plan S16): when the user named a worktrees
+    // root, the whole run works inside a freshly leased worktree and the
+    // primary checkout is never touched. A failed allocation cancels the
+    // just-created run with the reason instead of silently falling back to
+    // the primary checkout -- an agent writing where the user did not choose
+    // is exactly the failure mode this refuses.
+    if let Some(root) = args
+        .worktrees_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+    {
+        let root =
+            crate::routing::RoleMatrixRouting::validate_workspace(std::path::Path::new(root))?;
+        match allocate_run_worktree(&state, &snapshot, &template.name, &workspace, &root).await {
+            Ok(lease) => {
+                // The lease knows its path; routing hands it to every node of
+                // this run until the lease is released.
+                state
+                    .routing
+                    .set_run_workspace(snapshot.run.id, lease.path.clone());
+                state
+                    .run_leases
+                    .lock()
+                    .expect("run leases poisoned")
+                    .insert(snapshot.run.id, lease);
+            }
+            Err(err) => {
+                let reason = format!("worktree allocation failed: {err}");
+                let _ = state.engine.cancel(snapshot.run.id, &reason).await;
+                return Err(reason);
+            }
+        }
+    }
 
     drive_in_background(&state, snapshot.run.id);
     Ok(snapshot_view(&snapshot))
@@ -335,12 +627,24 @@ pub async fn cancel_workflow_run(
     args: ReasonArgs,
     state: State<'_, AppState>,
 ) -> Result<RunSnapshotView, String> {
-    state
+    let snapshot = state
         .engine
         .cancel(args.run_id, &args.reason)
         .await
-        .map(|snapshot| snapshot_view(&snapshot))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // The engine's cancel already stopped the in-flight provider sessions
+    // through the executor; ending the run also ends its claim on its
+    // worktree, so the lease is released now rather than waiting for a
+    // session teardown that will not come. Dirty trees are quarantined by
+    // the release policy, never destroyed.
+    release_run_lease(
+        &state.worktrees,
+        &state.run_leases,
+        &state.routing,
+        args.run_id,
+    )
+    .await;
+    Ok(snapshot_view(&snapshot))
 }
 
 #[tauri::command]
@@ -438,15 +742,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_built_in_template_is_listed_with_its_nodes() {
-        let views = list_workflow_templates();
-        assert!(!views.is_empty(), "the built-in presets must be visible");
+    fn every_built_in_template_maps_to_a_runnable_view() {
+        // The command itself reads storage (async, needs a running app), so
+        // this checks the mapping the command performs over the code-defined
+        // presets: the source of truth the startup sync writes from.
+        let views: Vec<WorkflowTemplateView> = built_in_templates()
+            .iter()
+            .map(|template| {
+                template_view(
+                    &template.name,
+                    &template.description,
+                    &template.nodes,
+                    1,
+                    true,
+                )
+            })
+            .collect();
+        assert_eq!(views.len(), 6, "all six S18 presets must ship");
         for view in &views {
             assert!(
                 !view.node_keys.is_empty(),
                 "{} has no nodes, so it cannot be run",
                 view.name
             );
+            assert!(view.is_built_in);
         }
     }
 

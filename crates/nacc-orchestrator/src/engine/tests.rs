@@ -12,11 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nacc_domain::{
-    AttemptTrigger, NodeFallback, NodeState, PermissionProfile, ProviderId, RoleKind, RunState,
-    WorkflowNode, WorkflowTemplate,
+    AttemptId, AttemptTrigger, NodeFallback, NodeState, PermissionProfile, ProviderId, RoleKind,
+    RunState, WorkflowNode, WorkflowRunId, WorkflowTemplate,
 };
 use nacc_storage::Database;
-use tokio::sync::Barrier;
+use tokio::sync::{watch, Barrier};
 
 use super::*;
 use crate::clock::VirtualClock;
@@ -70,6 +70,12 @@ struct FakeExecutor {
     delay: Option<Duration>,
     panic_on: Option<String>,
     fail_to_launch: bool,
+    /// Nodes that hold until `cancel_attempt` releases them -- the stand-in
+    /// for a real provider session that only a cancellation would stop.
+    release: Option<Arc<watch::Sender<bool>>>,
+    release_rx: Option<Arc<watch::Receiver<bool>>>,
+    release_keys: Vec<String>,
+    cancelled: Arc<Mutex<Vec<(WorkflowRunId, AttemptId)>>>,
 }
 
 impl FakeExecutor {
@@ -108,6 +114,19 @@ impl FakeExecutor {
     fn with_missing_provider(mut self) -> Self {
         self.fail_to_launch = true;
         self
+    }
+
+    /// Named nodes block after starting, until a cancellation releases them.
+    fn releasing_on(mut self, keys: &[&str]) -> Self {
+        let (tx, rx) = watch::channel(false);
+        self.release = Some(Arc::new(tx));
+        self.release_rx = Some(Arc::new(rx));
+        self.release_keys = keys.iter().map(|key| key.to_string()).collect();
+        self
+    }
+
+    fn cancelled_attempts(&self) -> Vec<(WorkflowRunId, AttemptId)> {
+        self.cancelled.lock().expect("cancelled poisoned").clone()
     }
 
     fn peak_concurrency(&self) -> usize {
@@ -167,6 +186,25 @@ impl NodeExecutor for FakeExecutor {
                 ));
             }
         }
+        if self.release_keys.contains(&request.node_key) {
+            let receiver: watch::Receiver<bool> = self
+                .release_rx
+                .as_ref()
+                .expect("release keys set without a channel")
+                .as_ref()
+                .clone();
+            let mut rx = receiver;
+            if !*rx.borrow_and_update()
+                && tokio::time::timeout(Duration::from_secs(10), rx.changed())
+                    .await
+                    .is_err()
+            {
+                self.live.fetch_sub(1, Ordering::SeqCst);
+                return Err(NodeExecutionFailure::permanent(
+                    "no cancellation ever released this attempt",
+                ));
+            }
+        }
         if self.fail_to_launch {
             self.live.fetch_sub(1, Ordering::SeqCst);
             return Err(NodeExecutionFailure::retryable(
@@ -196,6 +234,19 @@ impl NodeExecutor for FakeExecutor {
             }
         }
     }
+
+    async fn cancel_attempt(&self, run_id: WorkflowRunId, attempt_id: AttemptId) -> bool {
+        self.cancelled
+            .lock()
+            .expect("cancelled poisoned")
+            .push((run_id, attempt_id));
+        // Releasing the watch is the fake's "the provider process tree died":
+        // the in-flight execute returns instead of running to a 10s timeout.
+        if let Some(tx) = &self.release {
+            let _ = tx.send(true);
+        }
+        true
+    }
 }
 
 fn node(key: &str, role: RoleKind, depends_on: &[&str]) -> WorkflowNode {
@@ -208,6 +259,7 @@ fn node(key: &str, role: RoleKind, depends_on: &[&str]) -> WorkflowNode {
         permission_profile_hint: PermissionProfile::AutonomousWorktree,
         retryable: true,
         requires_approval: false,
+        timeout_secs: None,
         fallbacks: vec![],
     }
 }
@@ -1093,4 +1145,117 @@ async fn recovery_leaves_a_run_waiting_on_an_approval_resumable() {
     let still_waiting = harness.engine.resume(snapshot.run.id).await.unwrap();
     assert_eq!(still_waiting.run.state, RunState::AwaitingApproval);
     assert!(still_waiting.pending_approvals().len() == 1);
+}
+
+// --- node-declared timeouts and cancellation -----------------------------
+
+#[tokio::test]
+async fn a_nodes_declared_timeout_reaches_the_executor_and_none_stays_none() {
+    let executor = FakeExecutor::new();
+    let harness = harness_with(executor.clone(), all_roles_claude());
+
+    let mut timed = node("timed", EXPLORER, &[]);
+    timed.timeout_secs = Some(90);
+    harness
+        .engine
+        .start_and_run(
+            ProjectId::new(),
+            &template(
+                "timed",
+                vec![timed, node("defaulted", IMPLEMENTER, &["timed"])],
+            ),
+        )
+        .await
+        .unwrap();
+
+    let timed_requests = executor.requests("timed");
+    assert_eq!(timed_requests.len(), 1);
+    assert_eq!(
+        timed_requests[0].timeout,
+        Some(Duration::from_secs(90)),
+        "the node's own declared ceiling must reach the executor, not a global guess"
+    );
+    let defaulted = executor.requests("defaulted");
+    assert_eq!(defaulted.len(), 1);
+    assert_eq!(
+        defaulted[0].timeout, None,
+        "`None` means the executor's default applies -- the node made no declaration"
+    );
+}
+
+#[tokio::test]
+async fn cancelling_a_run_cancels_its_in_flight_attempt_and_a_late_result_cannot_overwrite_it() {
+    let executor = FakeExecutor::new().releasing_on(&["slow"]);
+    // Built by hand (not through `harness`) so the engine can live in an Arc
+    // shared with the driving task while the test also drives cancellation.
+    let db = Arc::new(Database::open_in_memory().unwrap());
+    let engine = Arc::new(WorkflowEngine::new(
+        db,
+        Arc::new(executor.clone()),
+        Arc::new(all_roles_claude()),
+        Arc::new(VirtualClock::starting_at(1_000)),
+        EngineConfig::default(),
+    ));
+    let started = engine
+        .start_run(
+            ProjectId::new(),
+            &template(
+                "cancellable",
+                vec![
+                    node("slow", EXPLORER, &[]),
+                    node("later", IMPLEMENTER, &["slow"]),
+                ],
+            ),
+        )
+        .await
+        .unwrap();
+    let run_id = started.run.id;
+
+    let driven = {
+        let engine = engine.clone();
+        tokio::spawn(async move { engine.run(run_id).await })
+    };
+
+    // Wait until the attempt is genuinely registered as in flight, then
+    // cancel the run out from under it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while executor.requests("slow").is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the slow attempt never started"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let cancelled = engine.cancel(run_id, "operator asked").await.unwrap();
+    assert_eq!(cancelled.run.state, RunState::Cancelled);
+
+    let cancels = executor.cancelled_attempts();
+    assert_eq!(
+        cancels.len(),
+        1,
+        "exactly the one in-flight attempt is handed to the executor for cancellation"
+    );
+    assert_eq!(cancels[0].0, run_id);
+
+    // The fake releases the attempt; it "succeeds" late. That late result
+    // must not resurrect the node out of `cancelled`.
+    let _ = driven.await;
+    let snapshot = engine.snapshot(run_id).await.unwrap();
+    assert_eq!(state_of(&snapshot, "slow"), NodeState::Cancelled);
+    assert_eq!(state_of(&snapshot, "later"), NodeState::Cancelled);
+    assert_eq!(
+        snapshot.run.state,
+        RunState::Cancelled,
+        "the late attempt result must not move the run either"
+    );
+    let slow_attempt = snapshot
+        .attempts
+        .iter()
+        .find(|attempt| attempt.finished_state.is_some())
+        .expect("the in-flight attempt row must still be closed");
+    assert_eq!(
+        slow_attempt.finished_state,
+        Some(NodeState::Succeeded),
+        "the attempt row records what actually happened, even when the node stays cancelled"
+    );
 }

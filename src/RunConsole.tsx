@@ -20,6 +20,7 @@ export default function RunConsole() {
   const [notice, setNotice] = useState("");
   const [project, setProject] = useState("");
   const [workspace, setWorkspace] = useState("");
+  const [worktreesRoot, setWorktreesRoot] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<RunSnapshotView | null>(null);
@@ -32,26 +33,25 @@ export default function RunConsole() {
   const loadVersion = useRef(0);
   const detailVersion = useRef(0);
 
-  // Templates and the durable run list. list_workflow_templates is a sync
-  // Rust command, so tauri-specta generates it *without* the
-  // {status:"ok"|"error"} wrapper the async commands get: it resolves to the
-  // bare array and rejects only on transport failure.
+  // Templates and the durable run list. Both are Result-returning commands,
+  // so tauri-specta wraps them as {status:"ok"|"error"} resolved unions.
   async function load() {
     const version = ++loadVersion.current;
     setLoading(true);
     setError(null);
     try {
-      const [templateList, runsResult] = await Promise.all([
+      const [templatesResult, runsResult] = await Promise.all([
         commands.listWorkflowTemplates(),
         commands.listWorkflowRuns(),
       ]);
       if (!mounted.current || version !== loadVersion.current) return;
+      if (templatesResult.status === "error") throw new Error(templatesResult.error);
       if (runsResult.status === "error") throw new Error(runsResult.error);
-      setTemplates(templateList);
+      setTemplates(templatesResult.data);
       setRuns(runsResult.data);
-      setTemplateName(current => templateList.some(template => template.name === current)
+      setTemplateName(current => templatesResult.data.some(template => template.name === current)
         ? current
-        : templateList[0]?.name ?? "");
+        : templatesResult.data[0]?.name ?? "");
     } catch (err) {
       if (mounted.current && version === loadVersion.current) setError(message(err));
     } finally {
@@ -117,6 +117,7 @@ export default function RunConsole() {
         project_id: project.trim(),
         template_name: templateName,
         workspace: workspace.trim(),
+        worktrees_root: worktreesRoot.trim() ? worktreesRoot.trim() : null,
       });
       if (result.status === "error") throw new Error(result.error);
       if (!mounted.current) return;
@@ -204,6 +205,9 @@ export default function RunConsole() {
           <legend>The workspace is the exact directory agents work in — never guessed</legend>
           <label>Project ID<input value={project} onChange={event => setProject(event.target.value)} /></label>
           <label>Workspace (absolute path)<input value={workspace} onChange={event => setWorkspace(event.target.value)} /></label>
+          <label>Worktrees root (optional — git worktree isolation for every node of the run)
+            <input value={worktreesRoot} onChange={event => setWorktreesRoot(event.target.value)} />
+          </label>
           <label>Workflow template<select value={templateName} onChange={event => setTemplateName(event.target.value)}>
             {templates.map(template => <option key={template.name} value={template.name}>{template.name}</option>)}
           </select></label>
@@ -211,7 +215,8 @@ export default function RunConsole() {
         </fieldset>
       </form>
       {selectedTemplate && <p>
-        <strong>{selectedTemplate.name}</strong> — {selectedTemplate.description}
+        <strong>{selectedTemplate.name}</strong>{templates.find(t => t.name === templateName)?.is_built_in ? " (built-in preset)" : ""}
+        {" — "}{selectedTemplate.description}
         <small>Nodes: {selectedTemplate.node_keys.join(", ")}</small>
       </p>}
       {!loading && templates.length === 0 && <p>No workflow templates available.</p>}

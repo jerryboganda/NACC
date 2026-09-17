@@ -208,6 +208,24 @@ CREATE TABLE run_checkpoints (
 );
 "#;
 
+/// V6: workflow templates become durable data (master plan S24 Phase 7's
+/// "versioned DAG templates"). Built-ins are synced from code at startup so
+/// the table is always a complete catalog, and user-authored templates live
+/// beside them under the same schema. `definition_json` holds the whole
+/// [`nacc_domain::WorkflowTemplate`] -- the same shape the engine already
+/// instantiates, so a stored template needs no translation to run.
+const V6_WORKFLOW_TEMPLATES: &str = r#"
+CREATE TABLE workflow_templates (
+    name                    TEXT PRIMARY KEY,
+    description             TEXT NOT NULL,
+    version                 INTEGER NOT NULL,
+    is_built_in             INTEGER NOT NULL,
+    definition_json         TEXT NOT NULL,
+    created_at_millis       INTEGER NOT NULL,
+    updated_at_millis       INTEGER NOT NULL
+);
+"#;
+
 pub(crate) fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(V1_INITIAL_SCHEMA),
@@ -215,6 +233,7 @@ pub(crate) fn migrations() -> Migrations<'static> {
         M::up(V3_WORKTREE_LEASES),
         M::up(V4_PROVIDER_CAPABILITIES),
         M::up(V5_WORKFLOW_STATE),
+        M::up(V6_WORKFLOW_TEMPLATES),
     ])
 }
 
@@ -240,8 +259,8 @@ mod tests {
         migrations().to_latest(&mut conn).unwrap();
         let version = migrations().current_version(&conn).unwrap();
         assert!(
-            matches!(version, SchemaVersion::Inside(n) if n.get() == 5),
-            "expected schema version 5, got {version:?}"
+            matches!(version, SchemaVersion::Inside(n) if n.get() == 6),
+            "expected schema version 6, got {version:?}"
         );
     }
 
@@ -272,7 +291,7 @@ mod tests {
         assert_eq!(value, "v");
         assert!(matches!(
             migrations().current_version(&conn).unwrap(),
-            SchemaVersion::Inside(n) if n.get() == 5
+            SchemaVersion::Inside(n) if n.get() == 6
         ));
 
         // And the V2 index must actually exist now -- proves V2 really
@@ -417,7 +436,7 @@ mod tests {
         assert_eq!(tables, 1, "V5 must have created the workflow-runs table");
         assert!(matches!(
             migrations().current_version(&conn).unwrap(),
-            SchemaVersion::Inside(n) if n.get() == 5
+            SchemaVersion::Inside(n) if n.get() == 6
         ));
     }
 }

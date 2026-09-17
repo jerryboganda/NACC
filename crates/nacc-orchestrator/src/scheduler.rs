@@ -227,6 +227,7 @@ mod tests {
             permission_profile_hint: PermissionProfile::AutonomousWorktree,
             retryable: true,
             requires_approval: false,
+            timeout_secs: None,
             fallbacks: vec![],
         }
     }
