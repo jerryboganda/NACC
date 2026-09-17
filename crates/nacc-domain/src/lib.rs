@@ -888,6 +888,8 @@ mod canonical_control_tests {
             thinking_mode: ThinkingMode::Auto,
             reasoning_level: ReasoningLevel::Auto,
             permission_profile: PermissionProfile::ReadOnly,
+            account_label: None,
+            fallbacks: vec![],
             enabled: true,
             created_at_millis: 1_735_000_000_000,
             updated_at_millis: 1_735_000_000_000,

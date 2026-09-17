@@ -82,8 +82,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Install the pinned GNU toolchain
-        run: rustup toolchain install 1.96.0-x86_64-pc-windows-gnu
+      - name: Install the pinned GNU toolchain (with clippy — components are per-toolchain)
+        run: rustup toolchain install 1.96.0-x86_64-pc-windows-gnu --component clippy --component rustfmt
       - name: Show the MinGW linker the GNU toolchain will use
         run: gcc --version
       - uses: Swatinem/rust-cache@v2
