@@ -442,6 +442,19 @@ pub struct RoleProfile {
     pub updated_at_millis: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+#[serde(deny_unknown_fields)]
+pub struct RoleProfileUpdate {
+    pub name: String,
+    pub role_kind: RoleKind,
+    pub provider_id: Option<ProviderId>,
+    pub model_id: Option<ModelId>,
+    pub thinking_mode: ThinkingMode,
+    pub reasoning_level: ReasoningLevel,
+    pub permission_profile: PermissionProfile,
+    pub enabled: bool,
+}
+
 define_id!(
     ApprovalId,
     "Identifies one approval request/decision attached to a workflow node (master plan S12, S14.1)."

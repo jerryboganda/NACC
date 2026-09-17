@@ -10,7 +10,7 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use nacc_domain::{
     ModelId, PermissionProfile, ProviderId, ReasoningLevel, RoleKind, RoleProfile, RoleProfileId,
-    ThinkingMode,
+    RoleProfileUpdate, ThinkingMode,
 };
 
 use crate::{lock, now_millis, Database, Result, StorageError};
@@ -151,6 +151,48 @@ impl Database {
         Ok(profile)
     }
 
+    pub async fn update_role_profile(
+        &self,
+        id: RoleProfileId,
+        update: RoleProfileUpdate,
+    ) -> Result<RoleProfile> {
+        let conn = self.connection();
+        tokio::task::spawn_blocking(move || -> Result<RoleProfile> {
+            let conn = lock(&conn);
+            let raw = conn
+                .query_row(
+                    &format!(
+                        "UPDATE role_profiles SET name = ?2, role_kind_json = ?3,
+                         provider_id_json = ?4, model_id = ?5, thinking_mode_json = ?6,
+                         reasoning_level_json = ?7, permission_profile_json = ?8,
+                         enabled = ?9, updated_at_millis = ?10
+                         WHERE id = ?1 RETURNING {SELECT_COLUMNS}"
+                    ),
+                    params![
+                        id.to_string(),
+                        update.name,
+                        serde_json::to_string(&update.role_kind)?,
+                        update
+                            .provider_id
+                            .map(|p| serde_json::to_string(&p))
+                            .transpose()?,
+                        update.model_id.as_ref().map(|m| m.0.as_str()),
+                        serde_json::to_string(&update.thinking_mode)?,
+                        serde_json::to_string(&update.reasoning_level)?,
+                        serde_json::to_string(&update.permission_profile)?,
+                        update.enabled,
+                        now_millis() as i64,
+                    ],
+                    row_to_raw,
+                )
+                .optional()?
+                .ok_or(StorageError::RoleProfileNotFound(id))?;
+            raw_to_role_profile(raw)
+        })
+        .await
+        .expect("storage worker thread panicked")
+    }
+
     pub async fn get_role_profile(&self, id: RoleProfileId) -> Result<Option<RoleProfile>> {
         let conn = self.connection();
         let id_str = id.to_string();
@@ -266,6 +308,80 @@ mod tests {
             "unassigned role must stay unassigned"
         );
         assert!(fetched.enabled);
+    }
+
+    fn profile_update() -> nacc_domain::RoleProfileUpdate {
+        nacc_domain::RoleProfileUpdate {
+            name: "Backend implementer".to_string(),
+            role_kind: RoleKind::BackendImplementer,
+            provider_id: Some(nacc_domain::ProviderId::Codex),
+            model_id: Some(nacc_domain::ModelId::from("test-model")),
+            thinking_mode: ThinkingMode::Off,
+            reasoning_level: ReasoningLevel::Medium,
+            permission_profile: PermissionProfile::AutonomousWorktree,
+            enabled: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn updating_fields_preserves_identity_and_creation_time() {
+        let db = Database::open_in_memory().unwrap();
+        let created = create_test_profile(&db).await;
+        let untouched = create_test_profile(&db).await;
+        let update = profile_update();
+        let updated = db
+            .update_role_profile(created.id, update.clone())
+            .await
+            .unwrap();
+        let fetched = db.get_role_profile(created.id).await.unwrap().unwrap();
+
+        assert_eq!(updated.id, created.id);
+        assert_eq!(fetched.id, created.id);
+        assert_eq!(fetched.created_at_millis, created.created_at_millis);
+        assert!(fetched.updated_at_millis >= created.updated_at_millis);
+        assert_eq!(fetched.name, update.name);
+        assert_eq!(fetched.role_kind, update.role_kind);
+        assert_eq!(fetched.provider_id, update.provider_id);
+        assert_eq!(fetched.model_id, update.model_id);
+        assert_eq!(fetched.thinking_mode, update.thinking_mode);
+        assert_eq!(fetched.reasoning_level, update.reasoning_level);
+        assert_eq!(fetched.permission_profile, update.permission_profile);
+        assert!(!fetched.enabled);
+        assert_eq!(
+            db.get_role_profile(untouched.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            untouched.name
+        );
+    }
+
+    #[tokio::test]
+    async fn updating_can_clear_provider_and_model_assignments() {
+        let db = Database::open_in_memory().unwrap();
+        let created = create_test_profile(&db).await;
+        db.update_role_profile(created.id, profile_update())
+            .await
+            .unwrap();
+        let mut update = profile_update();
+        update.provider_id = None;
+        update.model_id = None;
+        db.update_role_profile(created.id, update).await.unwrap();
+        let fetched = db.get_role_profile(created.id).await.unwrap().unwrap();
+        assert!(fetched.provider_id.is_none());
+        assert!(fetched.model_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn updating_a_missing_profile_returns_a_typed_error() {
+        let db = Database::open_in_memory().unwrap();
+        let id = RoleProfileId::new();
+        assert!(matches!(
+            db.update_role_profile(id, profile_update()).await,
+            Err(StorageError::RoleProfileNotFound(missing)) if missing == id
+        ));
+        assert!(db.list_role_profiles().await.unwrap().is_empty());
     }
 
     #[tokio::test]
