@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 // limitation this creates on a machine where the Rust side cannot link.
 import Providers from "./Providers";
 import RoleMatrix from "./RoleMatrix";
+import RunConsole from "./RunConsole";
 import { commands, type AppDiagnostics } from "./bindings";
 
 /**
@@ -88,6 +89,7 @@ export default function App() {
       )}
       <Providers />
       <RoleMatrix />
+      <RunConsole />
     </main>
   );
 }

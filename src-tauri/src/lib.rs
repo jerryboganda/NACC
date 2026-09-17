@@ -8,8 +8,11 @@
 //! privileged lives in this crate and the ones it depends on.
 
 mod diagnostics;
+mod executor;
 mod providers;
 mod role_profiles;
+mod routing;
+mod workflows;
 
 use tauri::Manager;
 use tauri_specta::{collect_commands, Builder};
@@ -29,11 +32,18 @@ pub struct AppState {
     /// shared connection behind a mutex, not a pool, is the right shape
     /// for a single-process desktop app.
     pub storage: nacc_storage::Database,
-    /// The real provider adapters this build can probe (and, in later
-    /// phases, launch). Populated once in `.setup()` via
-    /// `providers::build_registry` -- see that module's doc comment for
-    /// why only Claude and Codex are registered today.
-    pub providers: nacc_provider_core::ProviderRegistry,
+    /// The real provider adapters this build can probe (and launch).
+    /// Populated once in `.setup()` via `providers::build_registry` -- see
+    /// that module's doc comment for why only Claude and Codex are
+    /// registered today.
+    pub providers: std::sync::Arc<nacc_provider_core::ProviderRegistry>,
+    /// The Role Matrix as the engine's routing table, refreshed whenever role
+    /// profiles change. Shared with the executor so a role cannot route to one
+    /// model and launch with another.
+    pub routing: std::sync::Arc<routing::RoleMatrixRouting>,
+    /// The durable workflow engine (Phase 7), wired into the application so
+    /// real runs can be started and resumed.
+    pub engine: std::sync::Arc<nacc_orchestrator::WorkflowEngine>,
     /// Must outlive the app for the non-blocking file log writer to keep
     /// flushing -- see `nacc_observability::init_tracing`'s doc comment.
     _tracing_guard: tracing_appender::non_blocking::WorkerGuard,
@@ -55,6 +65,16 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         role_profiles::delete_role_profile,
         providers::detect_provider,
         providers::list_provider_installations,
+        providers::check_provider_auth,
+        workflows::list_workflow_templates,
+        workflows::start_workflow_run,
+        workflows::get_workflow_run,
+        workflows::list_workflow_runs,
+        workflows::pause_workflow_run,
+        workflows::cancel_workflow_run,
+        workflows::resume_workflow_run,
+        workflows::decide_workflow_approval,
+        workflows::list_workflow_events,
     ])
 }
 
@@ -148,10 +168,47 @@ pub fn run() {
                 .expect("failed to open NACC database");
             tracing::info!(db_path = %data_dir.join("nacc.sqlite").display(), "NACC storage ready");
 
+            // The engine, its executor, and the routing table are one object
+            // graph: the executor and the engine share the routing snapshot, so
+            // "which provider does this role use" has exactly one answer at
+            // launch time as well as at scheduling time.
+            let providers = std::sync::Arc::new(providers::build_registry());
+            let routing = std::sync::Arc::new(routing::RoleMatrixRouting::default());
+            let executor = std::sync::Arc::new(executor::ProviderNodeExecutor::new(
+                providers.clone(),
+                routing.clone(),
+                storage.clone(),
+            ));
+            let engine = std::sync::Arc::new(nacc_orchestrator::WorkflowEngine::with_defaults(
+                std::sync::Arc::new(storage.clone()),
+                executor,
+                routing.clone(),
+            ));
+
+            // Load the persisted Role Matrix into the routing snapshot. Done as
+            // a task rather than inline because storage is async and `.setup()`
+            // must not block on I/O (see the `Database::open` note above);
+            // until it completes, the snapshot is empty, which means "nothing is
+            // routable yet" rather than "route somewhere arbitrary".
+            {
+                let storage = storage.clone();
+                let routing = routing.clone();
+                tauri::async_runtime::spawn(async move {
+                    match routing.refresh_from(&storage).await {
+                        Ok(count) => tracing::info!(roles = count, "role matrix loaded"),
+                        Err(err) => {
+                            tracing::error!(error = %err, "loading the role matrix failed")
+                        }
+                    }
+                });
+            }
+
             app.manage(AppState {
                 diagnostics_run_id,
                 storage,
-                providers: providers::build_registry(),
+                providers,
+                routing,
+                engine,
                 _tracing_guard: guard,
             });
 

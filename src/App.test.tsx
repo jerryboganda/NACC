@@ -16,6 +16,20 @@ vi.mock("./bindings", () => ({
     getAppDiagnostics: () => getAppDiagnostics(),
     listRoleProfiles: async () => ({ status: "ok", data: [] }),
     listProviderInstallations: async () => ({ status: "ok", data: [] }),
+    // The Run Console panel App mounts calls these on its own load; empty-ok
+    // stubs keep App's tests about App's own behavior. RunConsole's tests
+    // mock the same boundary with realistic fixtures. listWorkflowTemplates
+    // is a sync Rust command, so it resolves to the bare array (no
+    // {status} wrapper), unlike the async commands.
+    listWorkflowTemplates: async () => [],
+    startWorkflowRun: async () => ({ status: "ok", data: null }),
+    getWorkflowRun: async () => ({ status: "ok", data: null }),
+    listWorkflowRuns: async () => ({ status: "ok", data: [] }),
+    pauseWorkflowRun: async () => ({ status: "ok", data: null }),
+    cancelWorkflowRun: async () => ({ status: "ok", data: null }),
+    resumeWorkflowRun: async () => ({ status: "ok", data: null }),
+    decideWorkflowApproval: async () => ({ status: "ok", data: null }),
+    listWorkflowEvents: async () => ({ status: "ok", data: [] }),
   },
 }));
 

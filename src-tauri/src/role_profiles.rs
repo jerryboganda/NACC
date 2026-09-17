@@ -68,6 +68,21 @@ fn validate_profile(name: &str, permission: PermissionProfile) -> Result<(), Str
     Ok(())
 }
 
+/// Reloads the engine's routing snapshot from storage after a successful
+/// mutation, so a run started right after a Role Matrix edit routes by the
+/// rules the GUI now shows, not the ones it showed at startup. A failed
+/// refresh must not fail the command -- the storage mutation already
+/// happened -- but it must be loud: the snapshot going stale silently is
+/// exactly the inconsistency this exists to prevent.
+async fn refresh_routing(state: &State<'_, AppState>) {
+    if let Err(err) = state.routing.refresh_from(&state.storage).await {
+        tracing::warn!(
+            error = %err,
+            "role profile mutated but the routing snapshot refresh failed"
+        );
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn list_role_profiles(
@@ -101,6 +116,7 @@ pub async fn create_role_profile(
         )
         .await
         .map_err(|e| e.to_string())?;
+    refresh_routing(&state).await;
     Ok(RoleProfileMutation {
         profile: RoleProfileView::from(profile),
     })
@@ -119,6 +135,7 @@ pub async fn update_role_profile(
         .update_role_profile(id, update)
         .await
         .map_err(|e| e.to_string())?;
+    refresh_routing(&state).await;
     Ok(RoleProfileMutation {
         profile: RoleProfileView::from(profile),
     })
@@ -135,7 +152,9 @@ pub async fn set_role_profile_enabled(
         .storage
         .set_role_profile_enabled(id, enabled)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    refresh_routing(&state).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -144,11 +163,13 @@ pub async fn delete_role_profile(
     id: RoleProfileId,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    state
+    let deleted = state
         .storage
         .delete_role_profile(id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    refresh_routing(&state).await;
+    Ok(deleted)
 }
 
 #[cfg(test)]

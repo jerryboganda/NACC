@@ -2015,6 +2015,7 @@ dependencies = [
 name = "nacc-app"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "nacc-domain",
  "nacc-events",
  "nacc-git",

@@ -128,6 +128,49 @@ pub async fn list_provider_installations(
         .map_err(|e| e.to_string())
 }
 
+/// Point-in-time sign-in status for one provider. Not persisted: the
+/// adapters check the native credential store's *existence* live on every
+/// call (contents never read, master plan S8.4), so a stored answer would
+/// only go stale; the frontend labels this as "checked now".
+#[derive(Clone, Debug, Serialize, specta::Type)]
+pub struct AuthProbeView {
+    pub provider: ProviderId,
+    pub authenticated: bool,
+    pub account_label: Option<String>,
+    pub detail: Option<String>,
+    pub checked_at_millis: String,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn check_provider_auth(
+    args: DetectProviderArgs,
+    state: State<'_, AppState>,
+) -> Result<AuthProbeView, String> {
+    let provider = state
+        .providers
+        .require(args.provider_id)
+        .map_err(|e| e.to_string())?;
+    // The adapters ignore the account parameter today (one native store per
+    // provider on this machine); a real label is passed so multi-account
+    // probing needs no command-shape change later.
+    let probe = provider
+        .probe_authentication(&nacc_provider_core::AccountProfile {
+            id: nacc_domain::ProviderAccountId::new(),
+            provider: args.provider_id,
+            label: String::new(),
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(AuthProbeView {
+        provider: args.provider_id,
+        authenticated: probe.authenticated,
+        account_label: probe.account_label,
+        detail: probe.detail,
+        checked_at_millis: now_millis().to_string(),
+    })
+}
+
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
