@@ -194,6 +194,18 @@ impl RoleRouting for RoleMatrixRouting {
             .map(|profile| profile.permission_profile)
     }
 
+    /// The role row's configured fallback chain (master plan S11), consulted
+    /// by the engine only when the row has no primary provider and the node
+    /// declares none of its own. Empty for unassigned rows.
+    fn fallback_chain_for(&self, role: &RoleKind) -> Vec<nacc_domain::NodeFallback> {
+        self.rows
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&role_key(role))
+            .map(|profile| profile.fallbacks.clone())
+            .unwrap_or_default()
+    }
+
     fn workspace_for(
         &self,
         project_id: ProjectId,
@@ -220,6 +232,8 @@ mod tests {
             thinking_mode: ThinkingMode::On,
             reasoning_level: ReasoningLevel::High,
             permission_profile: PermissionProfile::ReadOnly,
+            account_label: None,
+            fallbacks: vec![],
             enabled,
             created_at_millis: 1,
             updated_at_millis: 1,

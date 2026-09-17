@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { commands, type AuthProbeView, type ProviderId, type ProviderInstallationView } from "./bindings";
+import { commands, type AuthProbeView, type CapabilitySnapshotView, type ProviderId, type ProviderInstallationView } from "./bindings";
 
 const supported = ["claude", "codex"] as const;
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -7,15 +7,18 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 export default function Providers() {
   const [rows, setRows] = useState<ProviderInstallationView[]>([]);
   const [auths, setAuths] = useState<Record<string, AuthProbeView>>({});
+  const [caps, setCaps] = useState<Record<string, CapabilitySnapshotView>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<ProviderId | null>(null);
   const [authBusy, setAuthBusy] = useState<ProviderId | null>(null);
+  const [capBusy, setCapBusy] = useState<ProviderId | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const mounted = useRef(false);
   const request = useRef(0);
   const detecting = useRef(false);
   const authChecking = useRef<ProviderId | null>(null);
+  const capChecking = useRef<ProviderId | null>(null);
 
   async function load() {
     const version = ++request.current;
@@ -78,6 +81,26 @@ export default function Providers() {
     }
   }
 
+  async function checkCaps(provider: typeof supported[number]) {
+    if (capChecking.current !== null) return;
+    capChecking.current = provider;
+    setCapBusy(provider);
+    setError(null);
+    setNotice("");
+    try {
+      const result = await commands.probeProviderCapabilities({ provider_id: provider });
+      if (!mounted.current) return;
+      if (result.status === "error") throw new Error(result.error);
+      setCaps(current => ({ ...current, [provider]: result.data }));
+      setNotice(`${provider}: capability snapshot saved (${result.data.models.length} model(s) reported). Shown exactly as the adapter reported it.`);
+    } catch (err) {
+      if (mounted.current) setError(errorText(err));
+    } finally {
+      capChecking.current = null;
+      if (mounted.current) setCapBusy(null);
+    }
+  }
+
   return <section className="providers role-matrix" aria-labelledby="providers-title">
     <h2 id="providers-title">Providers</h2>
     <p>Native Windows installation observations only—not authentication, model availability, or readiness.</p>
@@ -93,7 +116,20 @@ export default function Providers() {
       {supported.map(provider => <button key={`auth-${provider}`} disabled={authBusy !== null} onClick={() => void checkAuth(provider)}>
         {authBusy === provider ? `Checking ${provider}…` : `Check ${provider} sign-in`}
       </button>)}
+      {supported.map(provider => <button key={`caps-${provider}`} disabled={capBusy !== null} onClick={() => void checkCaps(provider)}>
+        {capBusy === provider ? `Probing ${provider}…` : `Check ${provider} capabilities`}
+      </button>)}
     </div>
+    {(Object.entries(caps) as [ProviderId, CapabilitySnapshotView][]).map(([provider, cap]) => (
+      <div key={`caps-${provider}`} data-testid={`caps-${provider}`}>
+        <p><strong>{provider}</strong>: health {cap.health}, {cap.installed ? `version ${cap.version ?? "unreported"}` : "not installed"},
+          {" "}{cap.authenticated ? "signed in" : "not signed in"}, {cap.models.length} model(s). Checked at {cap.checked_at_millis}.</p>
+        <ul>{cap.models.map(model => <li key={model.id}>
+          <code>{model.id}</code> — {model.display_name}; reasoning levels: {model.reasoning_levels.length > 0 ? model.reasoning_levels.join(", ") : "none verified"};
+          thinking: {model.thinking.replaceAll("_", " ")}; context: {model.context_window_tokens ?? "unreported"}
+        </li>)}</ul>
+      </div>
+    ))}
     {(Object.entries(auths) as [ProviderId, AuthProbeView][]).map(([provider, auth]) => (
       <p key={provider} data-testid={`auth-${provider}`}>
         <strong>{provider}</strong>: {auth.authenticated ? "Signed in (native store present)" : "Not signed in"}{auth.detail ? ` — ${auth.detail}` : null}

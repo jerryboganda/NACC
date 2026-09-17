@@ -437,6 +437,21 @@ pub struct RoleProfile {
     pub thinking_mode: ThinkingMode,
     pub reasoning_level: ReasoningLevel,
     pub permission_profile: PermissionProfile,
+    /// Which of the provider's accounts this row prefers -- a *label the
+    /// user typed*, never a credential (master plan S11's "account profile"
+    /// and S17.4's multiple-accounts-per-provider). `None` means "the
+    /// provider's single native sign-in", which is what every adapter
+    /// actually uses today; the field exists so multi-account probing needs
+    /// no schema change when adapters gain account selection.
+    #[serde(default)]
+    pub account_label: Option<String>,
+    /// The row's own fallback chain (master plan S11, S14.4): consulted when
+    /// the row has no primary provider, *after* the node's own declared
+    /// fallbacks. Every real fallback is recorded on the attempt
+    /// (`AttemptTrigger::Fallback` + reason), so "what actually ran and why"
+    /// is always in the audit trail.
+    #[serde(default)]
+    pub fallbacks: Vec<NodeFallback>,
     pub enabled: bool,
     pub created_at_millis: u64,
     pub updated_at_millis: u64,
@@ -452,6 +467,10 @@ pub struct RoleProfileUpdate {
     pub thinking_mode: ThinkingMode,
     pub reasoning_level: ReasoningLevel,
     pub permission_profile: PermissionProfile,
+    #[serde(default)]
+    pub account_label: Option<String>,
+    #[serde(default)]
+    pub fallbacks: Vec<NodeFallback>,
     pub enabled: bool,
 }
 

@@ -30,6 +30,12 @@ vi.mock("./bindings", () => ({
     listWorkflowEvents: async () => ({ status: "ok", data: [] }),
     saveWorkflowTemplate: async () => ({ status: "ok", data: null }),
     deleteWorkflowTemplate: async () => ({ status: "ok", data: null }),
+    probeProviderCapabilities: async () => ({ status: "ok", data: null }),
+    latestProviderCapabilities: async () => ({ status: "ok", data: null }),
+    checkPrerequisites: async () => ({ status: "ok", data: [] }),
+    checkWorkspace: async () => ({ status: "ok", data: null }),
+    detectProvider: async () => ({ status: "ok", data: null }),
+    checkProviderAuth: async () => ({ status: "ok", data: null }),
   },
 }));
 

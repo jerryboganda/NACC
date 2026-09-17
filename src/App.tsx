@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import Providers from "./Providers";
 import RoleMatrix from "./RoleMatrix";
 import RunConsole from "./RunConsole";
+import SetupWizard from "./SetupWizard";
 import { commands, type AppDiagnostics } from "./bindings";
 
 /**
@@ -90,6 +91,7 @@ export default function App() {
       <Providers />
       <RoleMatrix />
       <RunConsole />
+      <SetupWizard />
     </main>
   );
 }

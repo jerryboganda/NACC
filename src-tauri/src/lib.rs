@@ -12,6 +12,7 @@ mod executor;
 mod providers;
 mod role_profiles;
 mod routing;
+mod setup;
 mod workflows;
 
 use tauri::Manager;
@@ -89,6 +90,10 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         workflows::list_workflow_events,
         workflows::save_workflow_template,
         workflows::delete_workflow_template,
+        providers::probe_provider_capabilities,
+        providers::latest_provider_capabilities,
+        setup::check_prerequisites,
+        setup::check_workspace,
     ])
 }
 

@@ -9,8 +9,8 @@
 use rusqlite::{params, OptionalExtension, Row};
 
 use nacc_domain::{
-    ModelId, PermissionProfile, ProviderId, ReasoningLevel, RoleKind, RoleProfile, RoleProfileId,
-    RoleProfileUpdate, ThinkingMode,
+    ModelId, NodeFallback, PermissionProfile, ProviderId, ReasoningLevel, RoleKind, RoleProfile,
+    RoleProfileId, RoleProfileUpdate, ThinkingMode,
 };
 
 use crate::{lock, now_millis, Database, Result, StorageError};
@@ -30,6 +30,8 @@ struct RawRoleProfileRow {
     thinking_mode_json: String,
     reasoning_level_json: String,
     permission_profile_json: String,
+    account_label: Option<String>,
+    fallbacks_json: String,
     enabled: bool,
     created_at_millis: i64,
     updated_at_millis: i64,
@@ -37,7 +39,7 @@ struct RawRoleProfileRow {
 
 const SELECT_COLUMNS: &str = "id, name, role_kind_json, provider_id_json, model_id, \
      thinking_mode_json, reasoning_level_json, permission_profile_json, \
-     enabled, created_at_millis, updated_at_millis";
+     account_label, fallbacks_json, enabled, created_at_millis, updated_at_millis";
 
 fn row_to_raw(row: &Row<'_>) -> rusqlite::Result<RawRoleProfileRow> {
     Ok(RawRoleProfileRow {
@@ -49,9 +51,11 @@ fn row_to_raw(row: &Row<'_>) -> rusqlite::Result<RawRoleProfileRow> {
         thinking_mode_json: row.get(5)?,
         reasoning_level_json: row.get(6)?,
         permission_profile_json: row.get(7)?,
-        enabled: row.get(8)?,
-        created_at_millis: row.get(9)?,
-        updated_at_millis: row.get(10)?,
+        account_label: row.get(8)?,
+        fallbacks_json: row.get(9)?,
+        enabled: row.get(10)?,
+        created_at_millis: row.get(11)?,
+        updated_at_millis: row.get(12)?,
     })
 }
 
@@ -74,6 +78,7 @@ fn raw_to_role_profile(raw: RawRoleProfileRow) -> Result<RoleProfile> {
     let thinking_mode: ThinkingMode = serde_json::from_str(&raw.thinking_mode_json)?;
     let reasoning_level: ReasoningLevel = serde_json::from_str(&raw.reasoning_level_json)?;
     let permission_profile: PermissionProfile = serde_json::from_str(&raw.permission_profile_json)?;
+    let fallbacks: Vec<NodeFallback> = serde_json::from_str(&raw.fallbacks_json)?;
 
     Ok(RoleProfile {
         id,
@@ -84,6 +89,8 @@ fn raw_to_role_profile(raw: RawRoleProfileRow) -> Result<RoleProfile> {
         thinking_mode,
         reasoning_level,
         permission_profile,
+        account_label: raw.account_label,
+        fallbacks,
         enabled: raw.enabled,
         created_at_millis: raw.created_at_millis as u64,
         updated_at_millis: raw.updated_at_millis as u64,
@@ -101,6 +108,8 @@ impl Database {
         thinking_mode: ThinkingMode,
         reasoning_level: ReasoningLevel,
         permission_profile: PermissionProfile,
+        account_label: Option<String>,
+        fallbacks: Vec<NodeFallback>,
     ) -> Result<RoleProfile> {
         let now = now_millis();
         let profile = RoleProfile {
@@ -112,6 +121,8 @@ impl Database {
             thinking_mode,
             reasoning_level,
             permission_profile,
+            account_label,
+            fallbacks,
             enabled: true,
             created_at_millis: now,
             updated_at_millis: now,
@@ -124,7 +135,7 @@ impl Database {
             conn.execute(
                 &format!(
                     "INSERT INTO role_profiles ({SELECT_COLUMNS}) VALUES \
-                     (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                     (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
                 ),
                 params![
                     insert.id.to_string(),
@@ -138,6 +149,8 @@ impl Database {
                     serde_json::to_string(&insert.thinking_mode)?,
                     serde_json::to_string(&insert.reasoning_level)?,
                     serde_json::to_string(&insert.permission_profile)?,
+                    insert.account_label,
+                    serde_json::to_string(&insert.fallbacks)?,
                     insert.enabled,
                     insert.created_at_millis as i64,
                     insert.updated_at_millis as i64,
@@ -165,7 +178,8 @@ impl Database {
                         "UPDATE role_profiles SET name = ?2, role_kind_json = ?3,
                          provider_id_json = ?4, model_id = ?5, thinking_mode_json = ?6,
                          reasoning_level_json = ?7, permission_profile_json = ?8,
-                         enabled = ?9, updated_at_millis = ?10
+                         account_label = ?9, fallbacks_json = ?10,
+                         enabled = ?11, updated_at_millis = ?12
                          WHERE id = ?1 RETURNING {SELECT_COLUMNS}"
                     ),
                     params![
@@ -180,6 +194,8 @@ impl Database {
                         serde_json::to_string(&update.thinking_mode)?,
                         serde_json::to_string(&update.reasoning_level)?,
                         serde_json::to_string(&update.permission_profile)?,
+                        update.account_label,
+                        serde_json::to_string(&update.fallbacks)?,
                         update.enabled,
                         now_millis() as i64,
                     ],
@@ -285,6 +301,8 @@ mod tests {
             ThinkingMode::Auto,
             ReasoningLevel::High,
             PermissionProfile::ReadOnly,
+            None,
+            vec![],
         )
         .await
         .expect("create_role_profile should succeed against a fresh database")
@@ -319,6 +337,12 @@ mod tests {
             thinking_mode: ThinkingMode::Off,
             reasoning_level: ReasoningLevel::Medium,
             permission_profile: PermissionProfile::AutonomousWorktree,
+            account_label: Some("work account".to_string()),
+            fallbacks: vec![nacc_domain::NodeFallback {
+                provider_id: nacc_domain::ProviderId::Claude,
+                model_id: None,
+                reason: "primary rate limited".to_string(),
+            }],
             enabled: false,
         }
     }
@@ -382,6 +406,36 @@ mod tests {
             Err(StorageError::RoleProfileNotFound(missing)) if missing == id
         ));
         assert!(db.list_role_profiles().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn account_label_and_fallback_chain_round_trip() {
+        // S11's "account profile" + "fallback chain" row fields: persisted,
+        // read back whole, and updatable back to "no account, no fallbacks".
+        let db = Database::open_in_memory().unwrap();
+        let created = create_test_profile(&db).await;
+        assert!(created.account_label.is_none());
+        assert!(created.fallbacks.is_empty());
+
+        db.update_role_profile(created.id, profile_update())
+            .await
+            .unwrap();
+        let fetched = db.get_role_profile(created.id).await.unwrap().unwrap();
+        assert_eq!(fetched.account_label.as_deref(), Some("work account"));
+        assert_eq!(fetched.fallbacks.len(), 1);
+        assert_eq!(
+            fetched.fallbacks[0].provider_id,
+            nacc_domain::ProviderId::Claude
+        );
+        assert_eq!(fetched.fallbacks[0].reason, "primary rate limited");
+
+        let mut cleared = profile_update();
+        cleared.account_label = None;
+        cleared.fallbacks = vec![];
+        db.update_role_profile(created.id, cleared).await.unwrap();
+        let fetched = db.get_role_profile(created.id).await.unwrap().unwrap();
+        assert!(fetched.account_label.is_none());
+        assert!(fetched.fallbacks.is_empty());
     }
 
     #[tokio::test]

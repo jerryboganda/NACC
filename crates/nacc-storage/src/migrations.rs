@@ -226,6 +226,21 @@ CREATE TABLE workflow_templates (
 );
 "#;
 
+/// V7: Role Matrix rows gain S11's "account profile" label and their own
+/// fallback chain. Both are additive with defaults: existing rows read back
+/// as "the provider's single native sign-in, no fallbacks", exactly what
+/// they meant before the columns existed.
+const V7_ROLE_ACCOUNTS_AND_FALLBACKS: &str = r#"
+ALTER TABLE role_profiles ADD COLUMN account_label TEXT;
+ALTER TABLE role_profiles ADD COLUMN fallbacks_json TEXT NOT NULL DEFAULT '[]';
+"#;
+
+/// The schema version a fresh database lands on. Test-only: the lib build
+/// never needs the number, and a dead-in-lib constant would trip the
+/// workspace's `-D warnings` gate.
+#[cfg(test)]
+pub(crate) const LATEST_VERSION: u32 = 7;
+
 pub(crate) fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(V1_INITIAL_SCHEMA),
@@ -234,6 +249,7 @@ pub(crate) fn migrations() -> Migrations<'static> {
         M::up(V4_PROVIDER_CAPABILITIES),
         M::up(V5_WORKFLOW_STATE),
         M::up(V6_WORKFLOW_TEMPLATES),
+        M::up(V7_ROLE_ACCOUNTS_AND_FALLBACKS),
     ])
 }
 
@@ -259,7 +275,7 @@ mod tests {
         migrations().to_latest(&mut conn).unwrap();
         let version = migrations().current_version(&conn).unwrap();
         assert!(
-            matches!(version, SchemaVersion::Inside(n) if n.get() == 6),
+            matches!(version, SchemaVersion::Inside(n) if n.get() == super::LATEST_VERSION as usize),
             "expected schema version 6, got {version:?}"
         );
     }
@@ -291,7 +307,7 @@ mod tests {
         assert_eq!(value, "v");
         assert!(matches!(
             migrations().current_version(&conn).unwrap(),
-            SchemaVersion::Inside(n) if n.get() == 6
+            SchemaVersion::Inside(n) if n.get() == super::LATEST_VERSION as usize
         ));
 
         // And the V2 index must actually exist now -- proves V2 really
@@ -436,7 +452,7 @@ mod tests {
         assert_eq!(tables, 1, "V5 must have created the workflow-runs table");
         assert!(matches!(
             migrations().current_version(&conn).unwrap(),
-            SchemaVersion::Inside(n) if n.get() == 6
+            SchemaVersion::Inside(n) if n.get() == super::LATEST_VERSION as usize
         ));
     }
 }

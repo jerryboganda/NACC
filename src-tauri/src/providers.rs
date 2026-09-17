@@ -8,8 +8,11 @@
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use nacc_domain::ProviderId;
-use nacc_provider_core::{ProviderInstallation, ProviderRegistry, RuntimeLocation, RuntimeProfile};
+use nacc_domain::{ProviderId, ReasoningLevel, ThinkingMode};
+use nacc_provider_core::{
+    AccountProfile, CapabilityContext, CapabilitySnapshot, ProviderInstallation, ProviderRegistry,
+    RuntimeLocation, RuntimeProfile,
+};
 
 use crate::AppState;
 
@@ -176,6 +179,128 @@ fn now_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// IPC view over one discovered model: exactly what the adapter reported
+/// (S10.1/S2.7 -- shown as-is, never normalized into a NACC-owned catalog).
+/// `reasoning_levels` is the honest list a GUI may offer for the model;
+/// an empty list means "no reasoning control has been verified".
+#[derive(Clone, Debug, Serialize, specta::Type)]
+pub struct ModelCapabilityView {
+    pub id: String,
+    pub display_name: String,
+    pub reasoning_levels: Vec<ReasoningLevel>,
+    pub thinking: ThinkingMode,
+    /// Context window in tokens as reported, stringified for IPC. `None`
+    /// means the provider did not report one -- shown as unknown, not guessed.
+    pub context_window_tokens: Option<String>,
+}
+
+/// IPC view over a [`CapabilitySnapshot`] (master plan S8.3): the timestamped
+/// facts a GUI needs to enable or disable model-aware controls honestly.
+#[derive(Clone, Debug, Serialize, specta::Type)]
+pub struct CapabilitySnapshotView {
+    pub provider: ProviderId,
+    pub installed: bool,
+    pub version: Option<String>,
+    pub authenticated: bool,
+    /// Adapter-declared health, snake_case ("ready", "not_installed",
+    /// "unauthenticated", ...). A GUI shows it; nothing infers readiness.
+    pub health: String,
+    pub models: Vec<ModelCapabilityView>,
+    pub checked_at_millis: String,
+}
+
+fn snapshot_view(snapshot: &CapabilitySnapshot) -> CapabilitySnapshotView {
+    CapabilitySnapshotView {
+        provider: snapshot.provider,
+        installed: snapshot.installation.installed,
+        version: snapshot.installation.version.clone(),
+        authenticated: snapshot.auth.authenticated,
+        health: match snapshot.health {
+            nacc_provider_core::ProviderHealth::Ready => "ready",
+            nacc_provider_core::ProviderHealth::NotInstalled => "not_installed",
+            nacc_provider_core::ProviderHealth::Unauthenticated => "unauthenticated",
+            nacc_provider_core::ProviderHealth::IneligibleCredential { .. } => {
+                "ineligible_credential"
+            }
+            nacc_provider_core::ProviderHealth::IncompatibleVersion { .. } => {
+                "incompatible_version"
+            }
+        }
+        .to_string(),
+        models: snapshot
+            .models
+            .iter()
+            .map(|model| ModelCapabilityView {
+                id: model.id.0.clone(),
+                display_name: model.display_name.clone(),
+                reasoning_levels: model.reasoning_levels.clone(),
+                thinking: model.thinking,
+                context_window_tokens: model.context_window_tokens.map(|tokens| tokens.to_string()),
+            })
+            .collect(),
+        checked_at_millis: snapshot.captured_at_millis.to_string(),
+    }
+}
+
+/// Probe one provider's capabilities live through its adapter and persist the
+/// snapshot (master plan S8.3: "store a timestamped snapshot and refresh it
+/// on demand"). Only registered adapters can be probed; an unknown provider
+/// is a typed error, never a guessed answer.
+#[tauri::command]
+#[specta::specta]
+pub async fn probe_provider_capabilities(
+    args: DetectProviderArgs,
+    state: State<'_, AppState>,
+) -> Result<CapabilitySnapshotView, String> {
+    let provider_id = args.provider_id;
+    let provider = state
+        .providers
+        .require(provider_id)
+        .map_err(|e| e.to_string())?
+        .clone();
+    let context = CapabilityContext {
+        account: AccountProfile {
+            id: nacc_domain::ProviderAccountId::new(),
+            provider: provider_id,
+            // A label is a display fact; nothing has discovered one yet.
+            label: String::new(),
+        },
+        runtime: RuntimeProfile {
+            location: RuntimeLocation::NativeWindows,
+            working_directory: String::new(),
+        },
+    };
+    let mut snapshot = provider
+        .capabilities(&context)
+        .await
+        .map_err(|e| e.to_string())?;
+    snapshot.captured_at_millis = now_millis();
+    state
+        .storage
+        .record_capability_snapshot(&snapshot)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot_view(&snapshot))
+}
+
+/// The most recent persisted snapshot for one provider on native Windows,
+/// if any. This is what the Role Matrix reads to decide whether a
+/// thinking/reasoning control may honestly be enabled -- and a GUI must
+/// treat `None` as "disabled with an explanation", never as a default.
+#[tauri::command]
+#[specta::specta]
+pub async fn latest_provider_capabilities(
+    args: DetectProviderArgs,
+    state: State<'_, AppState>,
+) -> Result<Option<CapabilitySnapshotView>, String> {
+    state
+        .storage
+        .latest_capability_snapshot(args.provider_id, RuntimeLocation::NativeWindows)
+        .await
+        .map(|stored| stored.as_ref().map(snapshot_view))
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

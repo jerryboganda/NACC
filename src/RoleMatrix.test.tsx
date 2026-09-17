@@ -5,7 +5,7 @@ import type { RoleProfileView } from "./bindings";
 
 const mocks = vi.hoisted(() => ({
   listRoleProfiles: vi.fn(), createRoleProfile: vi.fn(), updateRoleProfile: vi.fn(),
-  setRoleProfileEnabled: vi.fn(), deleteRoleProfile: vi.fn(),
+  setRoleProfileEnabled: vi.fn(), deleteRoleProfile: vi.fn(), latestProviderCapabilities: vi.fn(),
 }));
 vi.mock("./bindings", () => ({ commands: mocks }));
 import RoleMatrix from "./RoleMatrix";
@@ -14,6 +14,7 @@ const profile: RoleProfileView = {
   id: "test-role", name: "Explorer", role_kind: { custom: "Investigator" },
   provider_id: "claude", model_id: "user-configured-model", thinking_mode: "on",
   reasoning_level: "high", permission_profile: "read_only", enabled: true,
+  account_label: null, fallbacks: [],
   created_at_millis: "9007199254740993", updated_at_millis: "9007199254740994",
 };
 const ok = <T,>(data: T) => ({ status: "ok", data });
@@ -21,6 +22,7 @@ const ok = <T,>(data: T) => ({ status: "ok", data });
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.listRoleProfiles.mockResolvedValue(ok([]));
+  mocks.latestProviderCapabilities.mockResolvedValue(ok(null));
 });
 
 describe("Role Matrix", () => {
@@ -79,7 +81,50 @@ describe("Role Matrix", () => {
     expect(mocks.createRoleProfile).toHaveBeenCalledExactlyOnceWith({
       name: "New explorer", role_kind: "repository_explorer", provider_id: null, model_id: null,
       thinking_mode: "auto", reasoning_level: "auto", permission_profile: "read_only",
+      account_label: null, fallbacks: [],
     });
+  });
+
+  it("keeps thinking and reasoning disabled without a verified capability snapshot", async () => {
+    render(<RoleMatrix />);
+    await screen.findByText("No role profiles saved.");
+    expect(screen.getByLabelText("Thinking")).toBeDisabled();
+    expect(screen.getByLabelText("Reasoning effort")).toBeDisabled();
+    // Choosing a provider with no snapshot on file must not enable either
+    // control: absence of evidence is "disabled with an explanation", never
+    // a guessed default (S10.1, acceptance 11).
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "codex" } });
+    await waitFor(() => expect(mocks.latestProviderCapabilities).toHaveBeenCalledExactlyOnceWith({ provider_id: "codex" }));
+    expect(screen.getByLabelText("Thinking")).toBeDisabled();
+    expect(screen.getByLabelText("Reasoning effort")).toBeDisabled();
+  });
+
+  it("enables verified reasoning levels once a capability snapshot lists them", async () => {
+    mocks.latestProviderCapabilities.mockResolvedValue(ok({
+      provider: "codex", installed: true, version: "0.149.1", authenticated: true,
+      health: "ready", checked_at_millis: "42",
+      models: [{
+        id: "gpt-5-codex", display_name: "gpt-5-codex",
+        reasoning_levels: ["minimal", "low", "medium", "high", "xhigh"],
+        thinking: "unsupported", context_window_tokens: null,
+      }],
+    }));
+    mocks.createRoleProfile.mockImplementation(async args => ok({ profile: { ...profile, ...args } }));
+    render(<RoleMatrix />);
+    await screen.findByText("No role profiles saved.");
+    // The gating is model-aware: choose provider AND model, then the
+    // reasoning control carries exactly the verified levels (S10.1/S10.2).
+    fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "codex" } });
+    fireEvent.change(screen.getByLabelText("Requested model ID"), { target: { value: "gpt-5-codex" } });
+    const reasoning = await screen.findByLabelText("Reasoning effort");
+    await waitFor(() => expect(reasoning).toBeEnabled());
+    fireEvent.change(reasoning, { target: { value: "xhigh" } });
+    fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "Coded" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await screen.findByRole("button", { name: "Edit Coded" });
+    expect(mocks.createRoleProfile).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      reasoning_level: "xhigh", model_id: "gpt-5-codex",
+    }));
   });
 
   it("changes provider independently and preserves custom role, model, reasoning and enabled state", async () => {
@@ -92,7 +137,8 @@ describe("Role Matrix", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     await waitFor(() => expect(mocks.updateRoleProfile).toHaveBeenCalledExactlyOnceWith(profile.id, {
       name: profile.name, role_kind: profile.role_kind, provider_id: "codex", model_id: profile.model_id,
-      thinking_mode: "on", reasoning_level: "high", permission_profile: "read_only", enabled: true,
+      thinking_mode: "on", reasoning_level: "high", permission_profile: "read_only",
+      account_label: null, fallbacks: [], enabled: true,
     }));
     await screen.findByText("New role profile");
   });

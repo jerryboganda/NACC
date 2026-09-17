@@ -206,6 +206,16 @@ pub trait RoleRouting: Send + Sync {
     ) -> Option<PathBuf> {
         None
     }
+
+    /// The role's own fallback chain (master plan S11's per-row "fallback
+    /// chain"), consulted when the role has no primary provider and the node
+    /// declares none of its own. Empty by default. Every real fallback taken
+    /// from here is recorded on the attempt (`AttemptTrigger::Fallback` plus
+    /// the entry's reason), so S14.4's "a fallback must always be visible"
+    /// holds for role-level chains too.
+    fn fallback_chain_for(&self, _role: &RoleKind) -> Vec<nacc_domain::NodeFallback> {
+        Vec::new()
+    }
 }
 
 /// A routing table fixed at construction: what a configured Role Matrix row
@@ -1251,18 +1261,29 @@ async fn run_attempt(
     // names the provider that actually ran rather than the one that was
     // intended.
     let assigned = routing.provider_for(&node.role);
-    let (provider_id, trigger, fallback_reason) = match assigned {
-        Some(provider) => (Some(provider), trigger, None),
-        None => match node.fallbacks.first() {
+    // Fetched before the match so the chain outlives the borrow it feeds
+    // (and only fetched when it can matter).
+    let role_chain = if assigned.is_none() {
+        routing.fallback_chain_for(&node.role)
+    } else {
+        Vec::new()
+    };
+    let (provider_id, trigger, fallback_reason, fallback_model) = match assigned {
+        Some(provider) => (Some(provider), trigger, None, None),
+        // The node's own declared fallbacks win, then the role's configured
+        // chain: both are explicit declarations, and the one closer to the
+        // node is the more specific statement of intent.
+        None => match node.fallbacks.first().or_else(|| role_chain.first()) {
             Some(fallback) => (
                 Some(fallback.provider_id),
                 AttemptTrigger::Fallback,
                 Some(fallback.reason.clone()),
+                fallback.model_id.clone(),
             ),
-            None => (None, trigger, None),
+            None => (None, trigger, None, None),
         },
     };
-    let model_id = routing.model_for(&node.role);
+    let model_id = fallback_model.or_else(|| routing.model_for(&node.role));
     let declared = node.permission_profile_hint;
     let permission_profile = match routing.permission_profile_for(&node.role) {
         Some(role_ceiling) => declared.narrower_of(role_ceiling),
@@ -1331,7 +1352,9 @@ async fn run_attempt(
         provider_id: Some(provider_id),
         model_id,
         workspace,
-        timeout: node.timeout_secs.map(|secs| Duration::from_secs(u64::from(secs))),
+        timeout: node
+            .timeout_secs
+            .map(|secs| Duration::from_secs(u64::from(secs))),
         fallback_reason,
     };
 

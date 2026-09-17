@@ -11,3 +11,4 @@ publish.workspace = true
 nacc-domain = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }

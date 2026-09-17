@@ -18,6 +18,11 @@ pub struct CreateRoleProfileArgs {
     pub thinking_mode: ThinkingMode,
     pub reasoning_level: ReasoningLevel,
     pub permission_profile: PermissionProfile,
+    /// A user-typed account preference label -- never a credential (S11).
+    pub account_label: Option<String>,
+    /// The row's fallback chain, consulted only when no primary provider is
+    /// assigned and the node declares none of its own (S11, S14.4).
+    pub fallbacks: Vec<nacc_domain::NodeFallback>,
 }
 
 #[derive(Clone, Debug, Serialize, specta::Type)]
@@ -30,6 +35,8 @@ pub struct RoleProfileView {
     pub thinking_mode: ThinkingMode,
     pub reasoning_level: ReasoningLevel,
     pub permission_profile: PermissionProfile,
+    pub account_label: Option<String>,
+    pub fallbacks: Vec<nacc_domain::NodeFallback>,
     pub enabled: bool,
     pub created_at_millis: String,
     pub updated_at_millis: String,
@@ -46,6 +53,8 @@ impl From<RoleProfile> for RoleProfileView {
             thinking_mode: profile.thinking_mode,
             reasoning_level: profile.reasoning_level,
             permission_profile: profile.permission_profile,
+            account_label: profile.account_label,
+            fallbacks: profile.fallbacks,
             enabled: profile.enabled,
             created_at_millis: profile.created_at_millis.to_string(),
             updated_at_millis: profile.updated_at_millis.to_string(),
@@ -113,6 +122,8 @@ pub async fn create_role_profile(
             args.thinking_mode,
             args.reasoning_level,
             args.permission_profile,
+            args.account_label,
+            args.fallbacks,
         )
         .await
         .map_err(|e| e.to_string())?;
