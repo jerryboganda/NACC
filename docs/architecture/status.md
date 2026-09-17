@@ -1,5 +1,9 @@
 # NACC implementation status and agent handoff
 
+## Compute policy + CI (2026-09-17)
+
+Per the user's compute directive, heavy builds/tests/packaging now belong on GitHub Actions: `.github/workflows/ci.yml` runs fmt, frontend build+vitest, bindings-freshness, and full clippy+test batteries under BOTH MSVC and the pinned GNU toolchain on `windows-latest` runners; `desktop-build.yml` produces the unsigned NSIS bundle on demand. The rust-msvc job is the first MSVC verification this project has ever had — the local machine cannot link MSVC, so its result is new evidence, not a re-statement. Local background GNU builds remain only for pre-push iteration (strict technical requirement); the production VPS is out of scope for compute entirely. CI runs require commits on origin — pushing `main` for CI is authorized by that directive; releases/signing still require explicit human sign-off (docs/RELEASE-CHECKLIST.md).
+
 ## Full-roadmap sweep checkpoint — 2026-09-17 (phases 6–12 wave)
 
 This checkpoint covers the four commits after `2d75785`: `040c0c2` (engine IPC + Run Console), `0b506da` (Task D remainder), `a870434` (Phase 6 remainder), `20b9854` (Phases 8–11 crates). All local; nothing pushed. Read with the honesty rule in mind: **the phases are not "complete" in the S27 sense** — completion there means demonstrated acceptance evidence, and the items below that need live CLIs, a signing certificate, CI dispatch, or a clean machine are named, not waved through.

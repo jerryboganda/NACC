@@ -1,0 +1,32 @@
+# Manual Windows desktop packaging (master plan Phase 12's installer step).
+# workflow_dispatch only: a full Tauri bundle is exactly the kind of heavy
+# compute that must not run on developer machines or the production VPS.
+# The produced installers are UNSIGNED — signing requires the certificate
+# and procedure in docs/RELEASE-CHECKLIST.md, which is a human decision.
+
+name: desktop-build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Tauri build (NSIS, unsigned)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npx tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nacc-windows-unsigned
+          path: |
+            target/release/bundle/nsis/*.exe
+          if-no-files-found: error
