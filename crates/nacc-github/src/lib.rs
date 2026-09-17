@@ -19,8 +19,10 @@ pub enum GithubError {
 
 pub type Result<T> = std::result::Result<T, GithubError>;
 
+pub use classify::{classify, FailureClass};
 pub use cli::{gh_installed, gh_version};
 
+mod classify;
 mod cli;
 
 #[cfg(test)]

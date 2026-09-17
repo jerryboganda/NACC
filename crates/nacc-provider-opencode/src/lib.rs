@@ -12,6 +12,9 @@
 //! B.AI, DeepSeek-family, GLM-family, and Qwen-family gateway profiles
 //! per the master plan (S9.5).
 
+pub mod models;
+pub mod profile;
+
 use async_trait::async_trait;
 
 use nacc_domain::ProviderId;

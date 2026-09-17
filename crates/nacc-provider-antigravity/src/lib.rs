@@ -15,6 +15,8 @@
 //! the first thing to evaluate before assuming an official `agy` CLI will
 //! appear.
 
+pub mod handoff;
+
 use async_trait::async_trait;
 
 use nacc_domain::ProviderId;

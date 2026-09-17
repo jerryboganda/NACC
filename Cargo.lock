@@ -2150,6 +2150,7 @@ dependencies = [
  "nacc-domain",
  "nacc-provider-core",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
 ]
@@ -2217,6 +2218,7 @@ dependencies = [
  "nacc-domain",
  "nacc-provider-core",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
 ]
@@ -2228,6 +2230,7 @@ dependencies = [
  "nacc-domain",
  "serde",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
