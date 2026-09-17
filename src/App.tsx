@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 // once a real Rust build is possible on the developer's machine. See
 // docs/architecture/overview.md for the current, honestly-documented
 // limitation this creates on a machine where the Rust side cannot link.
+import RoleMatrix from "./RoleMatrix";
 import { commands, type AppDiagnostics } from "./bindings";
 
 /**
@@ -84,6 +85,7 @@ export default function App() {
           </dd>
         </dl>
       )}
+      <RoleMatrix />
     </main>
   );
 }

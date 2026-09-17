@@ -1,0 +1,14 @@
+.role-matrix { margin-block: 2rem; }
+.role-matrix fieldset { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; border: 1px solid #888; padding: 1rem; }
+.role-matrix label { display: flex; flex-direction: column; gap: .4rem; }
+.role-matrix input, .role-matrix select, .role-matrix button { font: inherit; padding: .6rem; min-height: 44px; }
+.role-matrix button { cursor: pointer; }
+.role-matrix :disabled { cursor: not-allowed; opacity: .65; }
+.role-matrix :focus-visible { outline: 3px solid #738bff; outline-offset: 3px; }
+.role-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.role-table-wrap { overflow-x: auto; margin-block: 1rem; }
+.role-matrix table { width: 100%; border-collapse: collapse; text-align: left; }
+.role-matrix th, .role-matrix td { padding: .7rem; border-bottom: 1px solid #888; }
+.role-matrix caption { text-align: left; padding-block: .7rem; }
+.role-matrix small { display: block; margin-top: .3rem; font-weight: normal; overflow-wrap: anywhere; }
+.role-matrix [role="alert"] { border-left: 4px solid #c85151; padding: .75rem; }

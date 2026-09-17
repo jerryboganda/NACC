@@ -21,8 +21,41 @@ pub struct CreateRoleProfileArgs {
 }
 
 #[derive(Clone, Debug, Serialize, specta::Type)]
+pub struct RoleProfileView {
+    pub id: RoleProfileId,
+    pub name: String,
+    pub role_kind: RoleKind,
+    pub provider_id: Option<ProviderId>,
+    pub model_id: Option<ModelId>,
+    pub thinking_mode: ThinkingMode,
+    pub reasoning_level: ReasoningLevel,
+    pub permission_profile: PermissionProfile,
+    pub enabled: bool,
+    pub created_at_millis: String,
+    pub updated_at_millis: String,
+}
+
+impl From<RoleProfile> for RoleProfileView {
+    fn from(profile: RoleProfile) -> Self {
+        Self {
+            id: profile.id,
+            name: profile.name,
+            role_kind: profile.role_kind,
+            provider_id: profile.provider_id,
+            model_id: profile.model_id,
+            thinking_mode: profile.thinking_mode,
+            reasoning_level: profile.reasoning_level,
+            permission_profile: profile.permission_profile,
+            enabled: profile.enabled,
+            created_at_millis: profile.created_at_millis.to_string(),
+            updated_at_millis: profile.updated_at_millis.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, specta::Type)]
 pub struct RoleProfileMutation {
-    pub profile: RoleProfile,
+    pub profile: RoleProfileView,
 }
 
 fn validate_profile(name: &str, permission: PermissionProfile) -> Result<(), String> {
@@ -37,11 +70,14 @@ fn validate_profile(name: &str, permission: PermissionProfile) -> Result<(), Str
 
 #[tauri::command]
 #[specta::specta]
-pub async fn list_role_profiles(state: State<'_, AppState>) -> Result<Vec<RoleProfile>, String> {
+pub async fn list_role_profiles(
+    state: State<'_, AppState>,
+) -> Result<Vec<RoleProfileView>, String> {
     state
         .storage
         .list_role_profiles()
         .await
+        .map(|profiles| profiles.into_iter().map(RoleProfileView::from).collect())
         .map_err(|e| e.to_string())
 }
 
@@ -65,7 +101,9 @@ pub async fn create_role_profile(
         )
         .await
         .map_err(|e| e.to_string())?;
-    Ok(RoleProfileMutation { profile })
+    Ok(RoleProfileMutation {
+        profile: RoleProfileView::from(profile),
+    })
 }
 
 #[tauri::command]
@@ -81,7 +119,9 @@ pub async fn update_role_profile(
         .update_role_profile(id, update)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(RoleProfileMutation { profile })
+    Ok(RoleProfileMutation {
+        profile: RoleProfileView::from(profile),
+    })
 }
 
 #[tauri::command]

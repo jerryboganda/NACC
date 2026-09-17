@@ -1,5 +1,21 @@
 # NACC implementation status and agent handoff
 
+## Local continuation checkpoint — 2026-09-17
+
+This checkpoint supersedes older current-state statements below; it does not mark Phase 6 complete.
+HEAD remains `bdd682a`; these continuation changes are uncommitted.
+
+- Completed the interrupted `RoleProfileView` conversion in create/update IPC responses; list/create/update consistently expose string timestamps.
+- Replaced the local, gitignored bindings stub by running the real GNU-toolchain `nacc-app --export-bindings` executable successfully. Do not recreate handwritten bindings.
+- Added and mounted a Role Matrix CRUD screen using the generated Tauri commands: create/edit, custom roles, independent provider/model assignment, enable/disable, confirmed deletion, loading/error/retry states, and duplicate-submit/stale-response protection.
+- Capability discovery is NOT connected. Model IDs and permissions are requested configuration, not validated or applied settings. Thinking/reasoning selectors are disabled, while existing stored values are preserved on edit.
+- Verified locally: GNU `cargo check -p nacc-app`; GNU `cargo test -p nacc-storage --lib` (48 passed); frontend `npm run build`; `npm test` (11 passed, including 7 Role Matrix tests). Frontend tests mock the IPC boundary; storage tests exercise SQLite. These are not a real desktop UI-to-SQLite end-to-end demonstration.
+- A proposed Tauri MockRuntime IPC test compiled but its test executable failed at startup with `0xc0000139` (`STATUS_ENTRYPOINT_NOT_FOUND`) locally. Its test-only changes were reverted; do not report it as passing. MSVC validation still requires a correctly configured Windows build environment / CI.
+- No CI dispatch, push, release, production operation, or provider authentication was performed.
+
+Next: wire capability/model discovery and native onboarding, extend role profiles for account/runtime/fallback configuration, then connect the durable workflow engine and verify a real safe-repository run. Phases 8–12, remaining Phase 3/5 acceptance gaps, and clean-machine/installer/security acceptance evidence remain outstanding. The detailed roadmap below remains applicable except for outdated claims that the frontend contains only diagnostics or IPC contains only one command.
+
+
 **Purpose of this document.** A self-contained handoff so a new implementation
 agent can continue NACC with no prior session context. It records *what is
 actually built*, *what is not*, *the exact uncommitted state of the working
