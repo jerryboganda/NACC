@@ -9,8 +9,8 @@ each item.
 **Audience.** An AI implementation agent (or human engineer) picking this
 repository up cold.
 
-**Status as of:** commit `061b003` ("Phase 7 fix: inline the backoff
-expression"), branch `main`. The Phase 7 engine and storage work that this
+**Status as of:** commit `db2588d` ("Document Phase 7 and the real
+local-build environment"), branch `main`. The Phase 7 engine and storage work that this
 document once recorded as an unprotected uncommitted vault is now
 **committed and CI-verified** (§6); Tasks A and B of the work plan (§9) are
 done. Next up: Task C (Phase 6 GUI) or Task D (Phase 7 wiring into the
@@ -242,9 +242,14 @@ document once recorded as unprotected uncommitted work is now committed on
 | `42ecd27` | `nacc-domain`: workflow state-machine types (RunState, NodeState, AttemptTrigger, NodeFallback, WorkflowNode, WorkflowTemplate, ApprovalDecision + PartialEq — its absence broke a domain test the first time the code was ever compiled-and-run), ApprovalId, PermissionProfile::rank/narrower_of. |
 | `b5a99ef` | `nacc-storage`: V5 migration (workflow_runs, node_runs, node_attempts, approvals, run_checkpoints + 5 indexes), the workflow repository, V3→V4 and V4→V5 upgrade tests, and a 9-test module for the new repository. |
 | `2de42ee` | `nacc-orchestrator`: scheduler, governor, clock, engine (1332 lines), recovery, templates, 50 tests, plus the `nacc-storage` dependency. |
-| `061b003` | Clippy fix (let_and_return) the first CI run caught — the one check local verification cannot reproduce, since clippy must link build scripts. |
+| `061b003` | Clippy fix (let_and_return) the first CI run caught — the one check local verification could not reproduce before the GNU-toolchain recipe below existed, since clippy must link build scripts. |
+| `86515ff` | Two more clippy lints in test code (`contains()`, `vec!`→array) — the last push made the full workspace clippy step runnable locally, so this class of failure stays local from now on. |
+| `db2588d` | Documentation (this file, overview.md) and `.gitignore` hygiene. |
 
-**Verified by CI run `35163001609`** (and locally first: 114 tests across
+**Verified by CI run `35164045996`** (HEAD `db2588d`): green end-to-end with
+a genuine installer artifact (`nacc-windows-installer-db2588d…`,
+4,229,391 bytes, confirmed via the artifacts API). Locally first: 114 tests
+across
 the three crates on the GNU-host toolchain, §2). Two latent bugs were found
 and fixed the first time this code actually ran, both in commit `2de42ee`:
 the recovery-requeue trigger was misclassified as `Retry` (a Pending node
@@ -419,8 +424,9 @@ Adapters are real, but:
   launch is therefore **not verified**.
 
 ### ✅ Phase 7 — Durable DAG orchestration (core; wiring remains)
-Committed as `42ecd27`/`b5a99ef`/`2de42ee`/`061b003`, CI-verified by run
-`35163001609`. What remains for the engine to be *usable* is Task D in §9
+Committed as `42ecd27`/`b5a99ef`/`2de42ee` (+ clippy fixes `061b003`,
+`86515ff`), CI-verified by run `35164045996`. What remains for the engine
+to be *usable* is Task D in §9
 (Tauri wiring, a production `NodeExecutor`/`RoleRouting`, provider-registry
 population, per-node timeouts and attempt leases, template versioning plus
 the two missing §18 presets and fallback chains) — see §6's gap list.
@@ -502,9 +508,11 @@ Done in this session, exceeding the original checklist:
    was misclassified as `Retry`, and the overlap test's barrier wrongly gated
    the dependent third node. All fixed in the commits.
 5. Committed in three logical commits (`42ecd27` domain, `b5a99ef` storage,
-   `2de42ee` orchestrator) + `061b003` clippy fix, pushed, and read the real
-   CI result: first run failed clippy on one lint (the only step local
-   verification cannot reproduce), fixed, **run `35163001609` green**.
+   `2de42ee` orchestrator) plus clippy fixes (`061b003`, `86515ff`), pushed,
+   and read the real CI results: two runs failed clippy on three lints total
+   (the one step local verification could not reproduce at the time), fixed,
+   then **run `35164045996` green at HEAD `db2588d`** with a real
+   4,229,391-byte installer artifact confirmed via the artifacts API.
 
 ### ✅ Task B — Documentation and hygiene *(done, 2026-09-17)*
 1. `docs/architecture/overview.md` retitled to the Phase 1–7 range, stale
@@ -626,18 +634,22 @@ full end-to-end demonstration.
 
 ## 12. Current exact facts (for quick verification)
 
-- Current `HEAD`: `061b003` "Phase 7 fix: inline the backoff expression".
-  Phase 7 commits, oldest first: `42ecd27`, `b5a99ef`, `2de42ee`, `061b003`.
-- Last green CI run for the Phase 7 code: `35163001609` (HEAD `061b003`).
-  Earlier verified runs: `35147797713` (Phase 5), `33332266695` (Phase 3
+- Current `HEAD`: `db2588d` "Document Phase 7 and the real local-build
+  environment". Phase 7 commits, oldest first: `42ecd27`, `b5a99ef`,
+  `2de42ee`, `061b003`, `86515ff`, `db2588d`.
+- Last green CI run: `35164045996` (HEAD `db2588d`), with a real installer
+  artifact (`nacc-windows-installer-db2588d…`, 4,229,391 bytes).
+- Earlier verified runs: `35147797713` (Phase 5), `33332266695` (Phase 3
   part 1), `33330656904` (Phase 2, all 21 steps, real 4,224,969-byte
   installer artifact).
-- One historical cancelled run: `35146915084` (a merge; reconcile it if it
-  matters). One failed run: `35162519675` (Phase 7 part 3, clippy
-  let_and_return — fixed by `061b003`).
-- Test counts as of `061b003`: domain 21, storage 43, orchestrator 50 —
-  114 in the three crates that the GNU-host toolchain can run locally;
-  CI runs the whole workspace.
+- Two historical failed runs, both understood: `35162519675` (Phase 7 part
+  3, clippy let_and_return — fixed by `061b003`) and `35163001609` (two
+  more clippy lints in test code — fixed by `86515ff`). One historical
+  cancelled run: `35146915084` (a merge; reconcile it if it matters).
+- Test counts as of `db2588d`: 268 tests across the workspace's library
+  crates, all green locally on the GNU-host toolchain (domain 21, storage
+  43, orchestrator 50, the rest unchanged from Phase 5); the `nacc-app`
+  test target runs only in CI.
 - Frontend surface today: `src/App.tsx`, `src/App.test.tsx`, `src/main.tsx`,
   `src/App.css`, `src/test/setup.ts`. No feature pages.
 - `src-tauri` source files today: `diagnostics.rs`, `lib.rs`, `main.rs`. One
