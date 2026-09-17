@@ -8,6 +8,7 @@
 //! privileged lives in this crate and the ones it depends on.
 
 mod diagnostics;
+mod providers;
 mod role_profiles;
 
 use tauri::Manager;
@@ -28,6 +29,11 @@ pub struct AppState {
     /// shared connection behind a mutex, not a pool, is the right shape
     /// for a single-process desktop app.
     pub storage: nacc_storage::Database,
+    /// The real provider adapters this build can probe (and, in later
+    /// phases, launch). Populated once in `.setup()` via
+    /// `providers::build_registry` -- see that module's doc comment for
+    /// why only Claude and Codex are registered today.
+    pub providers: nacc_provider_core::ProviderRegistry,
     /// Must outlive the app for the non-blocking file log writer to keep
     /// flushing -- see `nacc_observability::init_tracing`'s doc comment.
     _tracing_guard: tracing_appender::non_blocking::WorkerGuard,
@@ -47,6 +53,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         role_profiles::update_role_profile,
         role_profiles::set_role_profile_enabled,
         role_profiles::delete_role_profile,
+        providers::detect_provider,
+        providers::list_provider_installations,
     ])
 }
 
@@ -143,6 +151,7 @@ pub fn run() {
             app.manage(AppState {
                 diagnostics_run_id,
                 storage,
+                providers: providers::build_registry(),
                 _tracing_guard: guard,
             });
 

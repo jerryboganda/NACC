@@ -2046,6 +2046,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-specta",
  "thiserror 2.0.20",
+ "tokio",
  "tracing",
  "tracing-appender",
 ]

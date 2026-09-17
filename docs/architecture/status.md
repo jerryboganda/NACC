@@ -1,5 +1,14 @@
 # NACC implementation status and agent handoff
 
+## Provider detection checkpoint — 2026-09-17 (updated)
+
+Role Matrix milestone is committed locally as `2403554` (no push). This slice adds the real Claude/Codex registry in `AppState`, typed `detect_provider`/`list_provider_installations` IPC, persisted native-Windows installation observations, and a Providers panel. Detection is explicit, version-command-only, bounded to 15 seconds, and runs only on button click. Adapters return command names, not resolved executable paths; an unsuccessful probe may mean a missing or broken launcher. Authentication, readiness, and model availability are not inferred. Antigravity/Copilot/OpenCode and WSL2/Docker detection remain unwired.
+
+Verified: GNU build and export passed; both generated bindings present; adapter suites 25/19 and storage 48 tests passed; frontend build plus 15 Vitest tests passed; app clippy clean with `-D warnings`; **plain `cargo test -p nacc-app` passes 6/6** after the build-script fix below. No live provider detection against installed CLIs and no visual desktop end-to-end run have been demonstrated for this slice.
+
+**GNU test-loader root cause found and FIXED (build.rs):** ordinary `cargo test -p nacc-app` used to abort before test startup with `0xc0000139`. `dumpbin /dependents` ruled out ICU/VC++ redistributables. The test binary imports `TaskDialogIndirect` from `comctl32.dll` but had no `.rsrc` section — the app binary embeds Tauri's Common Controls v6 manifest via `cargo:rustc-link-arg-bins`, which only reaches binary targets. Fix in `src-tauri/build.rs`: for Windows GNU targets only, emit `cargo:rustc-link-arg` pointing at Tauri's already-generated `OUT_DIR/libresource.a`, so the manifest links into the test harness as well (duplicate static inclusion into bins is harmless; export re-verified). Verified: `cargo +1.96.0-x86_64-pc-windows-gnu test -p nacc-app` passes; `cargo ... run -p nacc-app -- --export-bindings` still writes bindings and runs. The `cargo:rustc-link-arg-tests` instruction is NOT valid in this Cargo version (whole build fails with "invalid instruction") — do not use it. MSVC-side test behavior still needs its own verification on a machine where MSVC links.
+
+
 ## Local continuation checkpoint — 2026-09-17
 
 This checkpoint supersedes older current-state statements below; it does not mark Phase 6 complete.

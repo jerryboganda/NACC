@@ -15,6 +15,7 @@ vi.mock("./bindings", () => ({
   commands: {
     getAppDiagnostics: () => getAppDiagnostics(),
     listRoleProfiles: async () => ({ status: "ok", data: [] }),
+    listProviderInstallations: async () => ({ status: "ok", data: [] }),
   },
 }));
 
@@ -32,6 +33,8 @@ describe("App", () => {
     render(<App />);
     expect(screen.getByTestId("diagnostics-loading")).toBeInTheDocument();
     expect(await screen.findByText("No role profiles saved.")).toBeInTheDocument();
+    expect(await screen.findByText("No saved provider detections.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("renders the diagnostics once the command resolves with status ok", async () => {
