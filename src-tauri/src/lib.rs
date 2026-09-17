@@ -8,6 +8,7 @@
 //! privileged lives in this crate and the ones it depends on.
 
 mod diagnostics;
+mod role_profiles;
 
 use tauri::Manager;
 use tauri_specta::{collect_commands, Builder};
@@ -39,7 +40,14 @@ pub struct AppState {
 /// `src/bindings.ts` the frontend imports -- see `main.rs` for why that
 /// flag exists instead of a `tests/` integration test.
 pub fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![diagnostics::get_app_diagnostics])
+    Builder::<tauri::Wry>::new().commands(collect_commands![
+        diagnostics::get_app_diagnostics,
+        role_profiles::list_role_profiles,
+        role_profiles::create_role_profile,
+        role_profiles::update_role_profile,
+        role_profiles::set_role_profile_enabled,
+        role_profiles::delete_role_profile,
+    ])
 }
 
 /// Absolute path to `src/bindings.ts`, resolved from `CARGO_MANIFEST_DIR`
