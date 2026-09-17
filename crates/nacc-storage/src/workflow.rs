@@ -563,18 +563,20 @@ impl Database {
         let conn = self.connection();
         let run = run_id.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let conn = lock(&conn);
-            conn.execute(
+            let mut conn = lock(&conn);
+            let transaction = conn.transaction()?;
+            transaction.execute(
                 "DELETE FROM run_checkpoints WHERE workflow_run_id = ?1",
                 [&run],
             )?;
-            conn.execute("DELETE FROM approvals WHERE workflow_run_id = ?1", [&run])?;
-            conn.execute(
+            transaction.execute("DELETE FROM approvals WHERE workflow_run_id = ?1", [&run])?;
+            transaction.execute(
                 "DELETE FROM node_attempts WHERE workflow_run_id = ?1",
                 [&run],
             )?;
-            conn.execute("DELETE FROM node_runs WHERE workflow_run_id = ?1", [&run])?;
-            conn.execute("DELETE FROM workflow_runs WHERE id = ?1", [&run])?;
+            transaction.execute("DELETE FROM node_runs WHERE workflow_run_id = ?1", [&run])?;
+            transaction.execute("DELETE FROM workflow_runs WHERE id = ?1", [&run])?;
+            transaction.commit()?;
             Ok(())
         })
         .await
@@ -1001,6 +1003,79 @@ mod tests {
         assert!(db.list_node_attempts(run.id).await.unwrap().is_empty());
         assert!(db.list_approvals(run.id).await.unwrap().is_empty());
         assert!(db.list_checkpoints(run.id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_run_deletion_rolls_back_all_child_deletions() {
+        let db = Database::open_in_memory().unwrap();
+        let run = run_record(1_000);
+        db.insert_workflow_run(&run).await.unwrap();
+        let node = node_run_record(run.id, "explore", 1_000);
+        db.insert_node_run(&node).await.unwrap();
+        let attempt = attempt_record(&node, 1, 1_100);
+        db.insert_node_attempt(&attempt).await.unwrap();
+        let approval = approval_record(run.id, node.id, 1_100);
+        db.insert_approval(&approval).await.unwrap();
+        db.append_checkpoint(run.id, RunState::Running, "start", 1_000)
+            .await
+            .unwrap();
+        {
+            let conn = db.connection();
+            lock(&conn)
+                .execute_batch(
+                    "CREATE TEMP TRIGGER reject_run_deletion
+                     BEFORE DELETE ON workflow_runs
+                     BEGIN
+                         SELECT RAISE(ABORT, 'injected deletion failure');
+                     END;",
+                )
+                .unwrap();
+        }
+
+        assert!(matches!(
+            db.delete_workflow_run(run.id).await.unwrap_err(),
+            StorageError::Sqlite(_)
+        ));
+        assert!(db.get_workflow_run(run.id).await.unwrap().is_some());
+        assert_eq!(db.list_node_runs(run.id).await.unwrap()[0].id, node.id);
+        assert_eq!(
+            db.list_node_attempts(run.id).await.unwrap()[0].id,
+            attempt.id
+        );
+        assert_eq!(db.list_approvals(run.id).await.unwrap()[0].id, approval.id);
+        assert_eq!(
+            db.list_checkpoints(run.id).await.unwrap()[0].detail,
+            "start"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_run_preserves_another_runs_history() {
+        let db = Database::open_in_memory().unwrap();
+        let deleted = run_record(1_000);
+        let retained = run_record(2_000);
+        for run in [&deleted, &retained] {
+            db.insert_workflow_run(run).await.unwrap();
+            let node = node_run_record(run.id, "explore", 1_000);
+            db.insert_node_run(&node).await.unwrap();
+            db.insert_node_attempt(&attempt_record(&node, 1, 1_100))
+                .await
+                .unwrap();
+            db.insert_approval(&approval_record(run.id, node.id, 1_100))
+                .await
+                .unwrap();
+            db.append_checkpoint(run.id, RunState::Running, "start", 1_000)
+                .await
+                .unwrap();
+        }
+
+        db.delete_workflow_run(deleted.id).await.unwrap();
+        assert!(db.get_workflow_run(deleted.id).await.unwrap().is_none());
+        assert!(db.get_workflow_run(retained.id).await.unwrap().is_some());
+        assert_eq!(db.list_node_runs(retained.id).await.unwrap().len(), 1);
+        assert_eq!(db.list_node_attempts(retained.id).await.unwrap().len(), 1);
+        assert_eq!(db.list_approvals(retained.id).await.unwrap().len(), 1);
+        assert_eq!(db.list_checkpoints(retained.id).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

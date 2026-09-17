@@ -415,5 +415,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tables, 1, "V5 must have created the workflow-runs table");
+        assert!(matches!(
+            migrations().current_version(&conn).unwrap(),
+            SchemaVersion::Inside(n) if n.get() == 5
+        ));
     }
 }
