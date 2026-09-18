@@ -23,8 +23,7 @@ impl Database {
                 .optional()?;
             Ok(value)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
@@ -41,8 +40,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn list_settings(&self) -> Result<Vec<(String, String)>> {
@@ -57,8 +55,7 @@ impl Database {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             Ok(rows)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Returns whether a setting actually existed to delete.
@@ -70,8 +67,7 @@ impl Database {
             let changed = conn.execute("DELETE FROM app_settings WHERE key = ?1", [key])?;
             Ok(changed > 0)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 }
 

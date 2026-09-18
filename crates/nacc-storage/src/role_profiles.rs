@@ -158,8 +158,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")?;
+        .await??;
 
         Ok(profile)
     }
@@ -205,8 +204,7 @@ impl Database {
                 .ok_or(StorageError::RoleProfileNotFound(id))?;
             raw_to_role_profile(raw)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn get_role_profile(&self, id: RoleProfileId) -> Result<Option<RoleProfile>> {
@@ -222,8 +220,7 @@ impl Database {
                 )
                 .optional()
             })
-            .await
-            .expect("storage worker thread panicked")?;
+            .await??;
 
         raw.map(raw_to_role_profile).transpose()
     }
@@ -243,8 +240,7 @@ impl Database {
                 let rows = stmt.query_map([], row_to_raw)?.collect();
                 rows
             })
-            .await
-            .expect("storage worker thread panicked")?;
+            .await??;
 
         raws.into_iter().map(raw_to_role_profile).collect()
     }
@@ -263,8 +259,7 @@ impl Database {
                 params![enabled, now, id_str],
             )
         })
-        .await
-        .expect("storage worker thread panicked")?;
+        .await??;
 
         if changed == 0 {
             return Err(StorageError::RoleProfileNotFound(id));
@@ -280,8 +275,7 @@ impl Database {
             let conn = lock(&conn);
             conn.execute("DELETE FROM role_profiles WHERE id = ?1", [id_str])
         })
-        .await
-        .expect("storage worker thread panicked")?;
+        .await??;
         Ok(changed > 0)
     }
 }

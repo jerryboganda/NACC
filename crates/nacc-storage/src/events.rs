@@ -100,8 +100,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Events for one workflow run, oldest first -- the shape a run-history
@@ -125,8 +124,7 @@ impl Database {
             let rows = stmt.query_map([id_str], row_to_raw)?.collect();
             rows
         })
-        .await
-        .expect("storage worker thread panicked")?;
+        .await??;
 
         raws.into_iter().map(raw_to_event).collect()
     }

@@ -6,7 +6,8 @@
 
 /// The failure classes the master plan's CI/CD flow distinguishes. `Unknown`
 /// is a real answer: an unclassified failure needs a human, not a rerun.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize, specta::Type, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum FailureClass {
     ProductDefect,
     StaleTest,

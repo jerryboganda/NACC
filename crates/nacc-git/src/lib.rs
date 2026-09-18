@@ -23,6 +23,8 @@
 
 use std::path::{Path, PathBuf};
 
+use nacc_policy::{Decision, PolicyEngine};
+
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
     #[error("failed to spawn git: {0}")]
@@ -33,6 +35,8 @@ pub enum GitError {
         exit_code: Option<i32>,
         stderr: String,
     },
+    #[error("git command denied by policy: {reason}")]
+    PolicyDenied { reason: String },
     #[error("{path:?} does not look like a Git repository (or git is not on PATH): {detail}")]
     NotARepository { path: PathBuf, detail: String },
     #[error("could not parse `git {context}` output: {detail}")]
@@ -89,12 +93,25 @@ fn new_git_command(cwd: Option<&Path>) -> tokio::process::Command {
 }
 
 async fn run_git(cwd: Option<&Path>, args: &[&str]) -> Result<String> {
+    let policy_argv = args
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect::<Vec<_>>();
+    if let Decision::Deny { reason } = PolicyEngine::baseline().check_command(&policy_argv, 0) {
+        return Err(GitError::PolicyDenied { reason });
+    }
+
     let output = new_git_command(cwd).args(args).output().await?;
     if !output.status.success() {
+        let redacted_args = args
+            .iter()
+            .map(|arg| nacc_secrets::redact(arg, &[]).0)
+            .collect();
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(GitError::CommandFailed {
-            args: args.iter().map(|s| s.to_string()).collect(),
+            args: redacted_args,
             exit_code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stderr: nacc_secrets::redact(&stderr, &[]).0,
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -288,7 +305,13 @@ impl GitRepository {
                 }
             }
         }
-        Err(last_err.expect("loop runs at least once, so this is always Some after it exits"))
+        match last_err {
+            Some(error) => Err(error),
+            None => Err(GitError::ParseError {
+                context: "worktree remove retry loop",
+                detail: "no removal attempt was executed".to_string(),
+            }),
+        }
     }
 
     /// Whether `path` (normally a worktree of this repository) has any

@@ -126,6 +126,10 @@ fn push_bounded(buffer: &mut String, text: &str) {
     }
 }
 
+fn redact_untrusted_text(text: &str) -> String {
+    nacc_secrets::redact(text, &[]).0
+}
+
 pub struct ProviderNodeExecutor {
     providers: Arc<ProviderRegistry>,
     routing: Arc<RoleMatrixRouting>,
@@ -158,7 +162,15 @@ impl ProviderNodeExecutor {
     /// node that otherwise succeeded, so the error is reported through
     /// `tracing` and the attempt continues.
     async fn record(&self, request: &NodeExecutionRequest, event: &ProviderEvent) {
-        let payload = serde_json::to_value(event).unwrap_or(serde_json::Value::Null);
+        let mut payload = serde_json::to_value(event).unwrap_or(serde_json::Value::Null);
+        let redaction_count = nacc_secrets::redact_json_value(&mut payload, &[]);
+        if redaction_count > 0 {
+            tracing::warn!(
+                node_key = %request.node_key,
+                redaction_count,
+                "redacted secret-like values from provider event before persistence"
+            );
+        }
         let Ok(record) = Event::new(
             Some(request.project_id),
             Some(request.run_id),
@@ -255,7 +267,8 @@ impl NodeExecutor for ProviderNodeExecutor {
                 // A missing or unusable binary will not fix itself between
                 // attempts, so it is permanent; anything else may be
                 // transient (a rate limit, a busy account).
-                let detail = format!("failed to launch {provider_id}: {err}");
+                let detail =
+                    redact_untrusted_text(&format!("failed to launch {provider_id}: {err}"));
                 return Err(match err {
                     nacc_provider_core::ProviderError::NotInstalled { .. } => {
                         NodeExecutionFailure::permanent(detail)
@@ -279,10 +292,32 @@ impl NodeExecutor for ProviderNodeExecutor {
         // Registered as cancellable before the stream is awaited and
         // deregistered on the single path below, so engine-driven
         // cancellation reaches exactly the live sessions.
-        self.in_flight
-            .lock()
-            .expect("in-flight sessions poisoned")
-            .insert(request.attempt_id, (provider_id, handle.session_id.clone()));
+        let registered = match self.in_flight.lock() {
+            Ok(mut in_flight) => {
+                in_flight.insert(request.attempt_id, (provider_id, handle.session_id.clone()));
+                true
+            }
+            Err(_) => false,
+        };
+        if !registered {
+            tracing::error!(
+                session = %handle.session_id.0,
+                "in-flight session registry is poisoned; cancelling the newly launched provider session"
+            );
+            if let Err(err) = provider
+                .cancel(&handle.session_id, CancellationMode::Forced)
+                .await
+            {
+                tracing::warn!(
+                    session = %handle.session_id.0,
+                    error = %err,
+                    "cancelling a session after registry failure also failed"
+                );
+            }
+            return Err(NodeExecutionFailure::permanent(
+                "the in-flight session registry is unavailable after an internal failure",
+            ));
+        }
 
         let outcome = async {
             let mut summary = String::new();
@@ -314,7 +349,8 @@ impl NodeExecutor for ProviderNodeExecutor {
                     }
                     Ok(Some(event)) => {
                         if let ProviderEvent::AssistantTextDelta { text } = &event {
-                            push_bounded(&mut summary, text);
+                            let redacted = redact_untrusted_text(text);
+                            push_bounded(&mut summary, &redacted);
                         }
                         self.record(&request, &event).await;
                         match event {
@@ -334,7 +370,8 @@ impl NodeExecutor for ProviderNodeExecutor {
                             }
                             ProviderEvent::TerminalError { message } => {
                                 return Err(NodeExecutionFailure::retryable(format!(
-                                    "provider reported a terminal error: {message}"
+                                    "provider reported a terminal error: {}",
+                                    redact_untrusted_text(&message)
                                 )));
                             }
                             _ => {}
@@ -344,10 +381,17 @@ impl NodeExecutor for ProviderNodeExecutor {
             }
         }
         .await;
-        self.in_flight
-            .lock()
-            .expect("in-flight sessions poisoned")
-            .remove(&request.attempt_id);
+        match self.in_flight.lock() {
+            Ok(mut in_flight) => {
+                in_flight.remove(&request.attempt_id);
+            }
+            Err(_) => {
+                tracing::error!(
+                    attempt = %request.attempt_id,
+                    "in-flight session registry is poisoned; completed attempt could not be deregistered"
+                );
+            }
+        }
         outcome
     }
 
@@ -357,11 +401,16 @@ impl NodeExecutor for ProviderNodeExecutor {
     /// finished -- nothing left to stop -- or the cancellation itself failed;
     /// either way it is logged and the engine's durable state stands.
     async fn cancel_attempt(&self, _run_id: WorkflowRunId, attempt_id: AttemptId) -> bool {
-        let claimed = self
-            .in_flight
-            .lock()
-            .expect("in-flight sessions poisoned")
-            .remove(&attempt_id);
+        let claimed = match self.in_flight.lock() {
+            Ok(mut in_flight) => in_flight.remove(&attempt_id),
+            Err(_) => {
+                tracing::error!(
+                    attempt = %attempt_id,
+                    "in-flight session registry is poisoned; cancellation cannot safely claim the provider session"
+                );
+                return false;
+            }
+        };
         let Some((provider_id, session)) = claimed else {
             return false;
         };

@@ -26,7 +26,7 @@
 //!   node never executes.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -36,8 +36,10 @@ use nacc_domain::{
     PermissionProfile, ProjectId, ProviderId, RoleKind, RunState, WorkflowNode, WorkflowRunId,
     WorkflowTemplate,
 };
+use nacc_quality::{run_gate, GateCommand, QualityEvidence};
 use nacc_storage::{
-    ApprovalRecord, CheckpointRecord, Database, NodeAttemptRecord, NodeRunRecord, WorkflowRunRecord,
+    ApprovalRecord, CheckpointRecord, Database, NodeAttemptRecord, NodeRunRecord,
+    QualityGateRecord, WorkflowRunRecord,
 };
 use tokio::sync::Notify;
 use tokio::task::JoinSet;
@@ -1228,6 +1230,109 @@ impl WorkflowEngine {
     }
 }
 
+fn quality_gate_failure_detail(evidence: &QualityEvidence) -> String {
+    if evidence.timed_out {
+        return format!("quality gate `{}` timed out", evidence.gate);
+    }
+    if let Some(exit_code) = evidence.exit_code {
+        return format!(
+            "quality gate `{}` failed with exit code {exit_code}",
+            evidence.gate
+        );
+    }
+    format!("quality gate `{}` could not be executed", evidence.gate)
+}
+
+fn quality_gate_failure_is_retryable(evidence: &QualityEvidence) -> bool {
+    // A real command result can change after the provider gets another repair
+    // attempt, and a timeout can be transient. A gate that never started
+    // (policy denial, missing executable, invalid cwd) is configuration and
+    // repeating the same attempt cannot repair it.
+    evidence.timed_out || evidence.exit_code.is_some()
+}
+
+async fn run_declared_quality_gates(
+    persistence: &Persistence,
+    run: &WorkflowRunRecord,
+    node_run_id: NodeRunId,
+    attempt_id: AttemptId,
+    node: &WorkflowNode,
+    workspace: Option<&Path>,
+) -> Result<Option<NodeExecutionFailure>> {
+    if node.quality_gates.is_empty() {
+        return Ok(None);
+    }
+
+    let Some(workspace) = workspace else {
+        return Ok(Some(NodeExecutionFailure::permanent(format!(
+            "node `{}` declares {} quality gate(s), but no workspace is assigned; gates were not run",
+            node.key,
+            node.quality_gates.len()
+        ))));
+    };
+
+    let mut required_failures = Vec::new();
+    for spec in &node.quality_gates {
+        let evidence = run_gate(workspace, &GateCommand::from(spec)).await;
+        let blocking_failure = (spec.required && !evidence.passed).then(|| {
+            (
+                quality_gate_failure_detail(&evidence),
+                quality_gate_failure_is_retryable(&evidence),
+            )
+        });
+
+        persistence
+            .db
+            .append_quality_gate_result(&QualityGateRecord {
+                workflow_run_id: run.id,
+                node_run_id,
+                attempt_id: Some(attempt_id),
+                evidence,
+                created_at_millis: persistence.clock.now_millis(),
+            })
+            .await?;
+
+        if let Some(failure) = blocking_failure {
+            required_failures.push(failure);
+        }
+    }
+
+    if required_failures.is_empty() {
+        return Ok(None);
+    }
+
+    let retryable = required_failures.iter().all(|(_, retryable)| *retryable);
+    let detail = required_failures
+        .iter()
+        .map(|(detail, _)| detail.as_str())
+        .collect::<Vec<_>>()
+        .join("; ");
+    Ok(Some(NodeExecutionFailure {
+        detail: format!(
+            "{} required quality gate(s) blocked node completion: {detail}",
+            required_failures.len()
+        ),
+        retryable,
+    }))
+}
+
+async fn node_was_overtaken(
+    persistence: &Persistence,
+    run_id: WorkflowRunId,
+    node_run_id: NodeRunId,
+) -> Result<bool> {
+    Ok(matches!(
+        persistence
+            .db
+            .list_node_runs(run_id)
+            .await?
+            .into_iter()
+            .find(|record| record.id == node_run_id)
+            .map(|record| record.state),
+        Some(NodeState::Cancelled) | Some(NodeState::Skipped)
+    ))
+}
+
 /// One attempt at one node, start to finish. A free function so the task it
 /// becomes owns everything it touches -- the engine is not borrowed across
 /// the await.
@@ -1351,7 +1456,7 @@ async fn run_attempt(
         permission_profile,
         provider_id: Some(provider_id),
         model_id,
-        workspace,
+        workspace: workspace.clone(),
         timeout: node
             .timeout_secs
             .map(|secs| Duration::from_secs(u64::from(secs))),
@@ -1377,16 +1482,40 @@ async fn run_attempt(
     // node must not come back as "failed" or "pending" because its orphaned
     // attempt finally reported. The attempt row still records what actually
     // happened; only the node-level state stays as the cancellation left it.
-    let overtaken = matches!(
-        persistence
-            .db
-            .list_node_runs(run.id)
-            .await?
-            .into_iter()
-            .find(|record| record.id == snapshot_node.id)
-            .map(|record| record.state),
-        Some(NodeState::Cancelled) | Some(NodeState::Skipped)
-    );
+    let overtaken_after_executor =
+        node_was_overtaken(&persistence, run.id, snapshot_node.id).await?;
+
+    // A provider success is provisional until every declared deterministic
+    // gate has run and its evidence is durable. Optional failures remain
+    // evidence only; required failures become ordinary attempt failures so the
+    // node's existing retry contract stays authoritative.
+    let should_run_gates =
+        !node.quality_gates.is_empty() && matches!(&outcome, Ok(_)) && !overtaken_after_executor;
+    let outcome = match outcome {
+        Ok(outcome) if should_run_gates => match run_declared_quality_gates(
+            &persistence,
+            &run,
+            snapshot_node.id,
+            attempt_id,
+            &node,
+            workspace.as_deref(),
+        )
+        .await?
+        {
+            Some(failure) => Err(failure),
+            None => Ok(outcome),
+        },
+        other => other,
+    };
+
+    // Cancellation can arrive while a deterministic gate is running. Re-read
+    // durable state after gate execution so a late result can never resurrect
+    // a cancelled/skipped node.
+    let overtaken = if should_run_gates {
+        node_was_overtaken(&persistence, run.id, snapshot_node.id).await?
+    } else {
+        overtaken_after_executor
+    };
 
     match outcome {
         Ok(outcome) => {

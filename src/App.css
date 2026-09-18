@@ -9,8 +9,14 @@ body {
 
 .app {
   padding: 2rem;
-  max-width: 640px;
+  max-width: 1180px;
   margin: 0 auto;
+}
+
+@media (max-width: 640px) {
+  .app {
+    padding: 1rem;
+  }
 }
 
 dl {

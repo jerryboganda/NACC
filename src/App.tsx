@@ -10,6 +10,11 @@ import Providers from "./Providers";
 import RoleMatrix from "./RoleMatrix";
 import RunConsole from "./RunConsole";
 import SetupWizard from "./SetupWizard";
+import CICDCenter from "./CICDCenter";
+import WorkflowInspector from "./WorkflowInspector";
+import WorktreeManager from "./WorktreeManager";
+import AuditLog from "./AuditLog";
+import QualityReviewCenter from "./QualityReviewCenter";
 import { commands, type AppDiagnostics } from "./bindings";
 
 /**
@@ -90,6 +95,11 @@ export default function App() {
       <Providers />
       <RoleMatrix />
       <RunConsole />
+      <CICDCenter />
+      <WorkflowInspector />
+      <WorktreeManager />
+      <AuditLog />
+      <QualityReviewCenter />
       <SetupWizard />
     </main>
   );

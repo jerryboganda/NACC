@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 nacc-domain = { workspace = true }
+nacc-quality = { workspace = true }
 # The engine persists every transition before it takes the next one, so a
 # crash is always discoverable from the database alone (master plan S14.1,
 # S16). Storage does not depend on the orchestrator, so this direction is

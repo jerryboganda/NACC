@@ -96,8 +96,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn list_workflow_templates(&self) -> Result<Vec<WorkflowTemplateRecord>> {
@@ -147,8 +146,7 @@ impl Database {
                 )
                 .collect()
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn get_workflow_template(
@@ -193,8 +191,7 @@ impl Database {
             )
             .transpose()
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Delete a custom template. Built-ins refuse: they are the product's
@@ -218,8 +215,7 @@ impl Database {
                 conn.execute("DELETE FROM workflow_templates WHERE name = ?1", [&name])?;
             Ok(deleted > 0)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// The next version number for a template: one past its current stored
@@ -250,6 +246,7 @@ mod tests {
             retryable: true,
             requires_approval: false,
             timeout_secs: None,
+            quality_gates: vec![],
             fallbacks: vec![],
         }
     }

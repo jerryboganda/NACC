@@ -76,8 +76,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn list_provider_installations(&self) -> Result<Vec<ProviderInstallation>> {
@@ -96,8 +95,7 @@ impl Database {
             }
             Ok(out)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Persist a capability snapshot and return the id it was stored
@@ -127,8 +125,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")?;
+        .await??;
         Ok(id)
     }
 
@@ -157,8 +154,7 @@ impl Database {
                 None => Ok(None),
             }
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// When each snapshot for a provider was captured, newest first -- the
@@ -192,8 +188,7 @@ impl Database {
             }
             Ok(out)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 }
 

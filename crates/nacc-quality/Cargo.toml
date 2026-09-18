@@ -9,6 +9,9 @@ publish.workspace = true
 
 [dependencies]
 nacc-domain = { workspace = true }
+nacc-policy = { workspace = true }
+nacc-process = { workspace = true }
+nacc-secrets = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

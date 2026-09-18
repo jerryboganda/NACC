@@ -40,6 +40,7 @@ fn node(
         retryable: true,
         requires_approval: false,
         timeout_secs: None,
+        quality_gates: vec![],
         fallbacks: vec![],
     }
 }

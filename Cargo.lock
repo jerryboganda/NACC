@@ -2078,6 +2078,8 @@ dependencies = [
 name = "nacc-git"
 version = "0.0.1"
 dependencies = [
+ "nacc-policy",
+ "nacc-secrets",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -2089,6 +2091,8 @@ version = "0.0.1"
 dependencies = [
  "nacc-domain",
  "serde",
+ "serde_json",
+ "specta",
  "thiserror 2.0.20",
  "tokio",
 ]
@@ -2112,6 +2116,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "nacc-domain",
+ "nacc-quality",
  "nacc-storage",
  "serde",
  "serde_json",
@@ -2228,6 +2233,9 @@ name = "nacc-quality"
 version = "0.0.1"
 dependencies = [
  "nacc-domain",
+ "nacc-policy",
+ "nacc-process",
+ "nacc-secrets",
  "serde",
  "thiserror 2.0.20",
  "tokio",
@@ -2257,6 +2265,7 @@ version = "0.0.1"
 dependencies = [
  "nacc-domain",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 
@@ -2267,6 +2276,8 @@ dependencies = [
  "nacc-domain",
  "nacc-events",
  "nacc-provider-core",
+ "nacc-quality",
+ "nacc-review",
  "rusqlite",
  "rusqlite_migration",
  "serde_json",

@@ -170,8 +170,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Audit records for one workflow run, oldest first (master plan S22's
@@ -195,8 +194,53 @@ impl Database {
             let rows = stmt.query_map([id_str], row_to_raw)?.collect();
             rows
         })
-        .await
-        .expect("storage worker thread panicked")?;
+        .await??;
+
+        raws.into_iter().map(raw_to_audit_record).collect()
+    }
+
+    /// Newest audit records across the application, newest first.
+    ///
+    /// Callers supply an explicit limit so UI/diagnostic surfaces never
+    /// accidentally materialize the entire security trail into memory.
+    pub async fn list_recent_audit_records(&self, limit: u32) -> Result<Vec<AuditRecord>> {
+        let conn = self.connection();
+        let limit = i64::from(limit);
+        let raws = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<RawAuditRow>> {
+            let conn = lock(&conn);
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {SELECT_COLUMNS} FROM audit_events \
+                 ORDER BY created_at_millis DESC, rowid DESC LIMIT ?1"
+            ))?;
+            let rows = stmt.query_map([limit], row_to_raw)?.collect();
+            rows
+        })
+        .await??;
+
+        raws.into_iter().map(raw_to_audit_record).collect()
+    }
+
+    /// Newest audit records for one workflow run, newest first.
+    pub async fn list_recent_audit_records_for_workflow_run(
+        &self,
+        workflow_run_id: WorkflowRunId,
+        limit: u32,
+    ) -> Result<Vec<AuditRecord>> {
+        let conn = self.connection();
+        let id_str = workflow_run_id.to_string();
+        let limit = i64::from(limit);
+        let raws = tokio::task::spawn_blocking(move || -> rusqlite::Result<Vec<RawAuditRow>> {
+            let conn = lock(&conn);
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {SELECT_COLUMNS} FROM audit_events WHERE workflow_run_id = ?1 \
+                 ORDER BY created_at_millis DESC, rowid DESC LIMIT ?2"
+            ))?;
+            let rows = stmt
+                .query_map(rusqlite::params![id_str, limit], row_to_raw)?
+                .collect();
+            rows
+        })
+        .await??;
 
         raws.into_iter().map(raw_to_audit_record).collect()
     }
@@ -268,5 +312,35 @@ mod tests {
         assert!(found.requested_provider.is_none());
         assert!(found.redacted_arguments.is_empty());
         assert!(found.working_directory.is_none());
+    }
+
+    #[tokio::test]
+    async fn recent_listing_is_bounded_and_newest_first() {
+        let db = Database::open_in_memory().unwrap();
+        let run_id = WorkflowRunId::new();
+        for (index, timestamp) in [10_u64, 20, 30].into_iter().enumerate() {
+            let record = AuditRecord::new(
+                "system".to_string(),
+                format!("action-{index}"),
+                None,
+                Some(run_id),
+                None,
+                None,
+                timestamp,
+            );
+            db.append_audit_record(&record).await.unwrap();
+        }
+
+        let recent = db.list_recent_audit_records(2).await.unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].created_at_millis, 30);
+        assert_eq!(recent[1].created_at_millis, 20);
+
+        let for_run = db
+            .list_recent_audit_records_for_workflow_run(run_id, 1)
+            .await
+            .unwrap();
+        assert_eq!(for_run.len(), 1);
+        assert_eq!(for_run[0].created_at_millis, 30);
     }
 }

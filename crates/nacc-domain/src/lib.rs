@@ -494,13 +494,13 @@ define_id!(
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum WorktreeState {
-    /// Allocated to a run and usable now.
+    // Allocated to a run and usable now.
     Active,
-    /// Moved aside because it was dirty/unpushed when its run ended. Never
-    /// deleted: master plan S16 requires quarantine over destruction so a
-    /// human can still recover the work.
+    // Moved aside because it was dirty/unpushed when its run ended. Never
+    // deleted: master plan S16 requires quarantine over destruction so a
+    // human can still recover the work.
     Quarantined,
-    /// Cleanly removed (its branch was integrated or explicitly abandoned).
+    // Cleanly removed (its branch was integrated or explicitly abandoned).
     Released,
 }
 
@@ -631,6 +631,23 @@ pub struct NodeFallback {
     pub reason: String,
 }
 
+/// A deterministic command that a workflow node declares as completion
+/// evidence. This is intentionally a declarative domain contract rather than
+/// an executable policy: `nacc-quality` owns spawning and policy checks while
+/// the orchestrator owns when declared gates become part of node completion.
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize, specta::Type)]
+pub struct QualityGateSpec {
+    /// Stable within one node and used to correlate durable evidence.
+    pub name: String,
+    /// Exact executable plus arguments. This is never a shell command string.
+    pub argv: Vec<String>,
+    /// Per-gate execution ceiling in seconds. `u32` stays IPC-safe for specta.
+    pub timeout_secs: u32,
+    /// Required gates will eventually participate in the node completion
+    /// predicate; optional gates remain evidence without blocking completion.
+    pub required: bool,
+}
+
 /// One node of a workflow template (master plan S14.2's DAG).
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize, specta::Type)]
 pub struct WorkflowNode {
@@ -659,6 +676,11 @@ pub struct WorkflowNode {
     /// because specta refuses pointer-width integers across IPC.
     #[serde(default)]
     pub timeout_secs: Option<u32>,
+    /// Machine-readable deterministic checks declared by this node. Older
+    /// persisted templates predate this field, so absence must remain exactly
+    /// equivalent to declaring no quality gates.
+    #[serde(default)]
+    pub quality_gates: Vec<QualityGateSpec>,
     pub fallbacks: Vec<NodeFallback>,
 }
 
@@ -828,6 +850,12 @@ mod canonical_control_tests {
                 retryable: true,
                 requires_approval: false,
                 timeout_secs: None,
+                quality_gates: vec![QualityGateSpec {
+                    name: "unit-tests".into(),
+                    argv: vec!["cargo".into(), "test".into(), "-p".into(), "example".into()],
+                    timeout_secs: 300,
+                    required: true,
+                }],
                 fallbacks: vec![NodeFallback {
                     provider_id: ProviderId::Codex,
                     model_id: None,
@@ -839,6 +867,26 @@ mod canonical_control_tests {
         let back: WorkflowTemplate = serde_json::from_str(&json).unwrap();
         assert_eq!(back.nodes.len(), 1);
         assert_eq!(back.nodes[0].fallbacks[0].provider_id, ProviderId::Codex);
+        assert_eq!(back.nodes[0].quality_gates[0].name, "unit-tests");
+        assert!(back.nodes[0].quality_gates[0].required);
+    }
+
+    #[test]
+    fn workflow_node_without_quality_gates_deserializes_as_no_gates() {
+        let json = r#"{
+            "key":"legacy",
+            "title":"Legacy node",
+            "role":"repository_explorer",
+            "depends_on":[],
+            "instruction":"inspect",
+            "permission_profile_hint":"read_only",
+            "retryable":true,
+            "requires_approval":false,
+            "timeout_secs":null,
+            "fallbacks":[]
+        }"#;
+        let node: WorkflowNode = serde_json::from_str(json).unwrap();
+        assert!(node.quality_gates.is_empty());
     }
 
     #[test]

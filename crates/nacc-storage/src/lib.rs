@@ -3,12 +3,11 @@
 //!
 //! One local SQLite database per NACC user profile (S4.4), opened once at
 //! startup via [`Database::open`]. This crate implements real schema,
-//! migrations, and repositories for exactly the data groups Phase 2's own
-//! deliverable list names: settings, role profiles, events, and audit
-//! records. S4.4 lists many more data groups (provider installations,
-//! discovered models, workflow templates/runs, worktree allocations,
-//! quality-gate results, review findings, CI/CD records, approvals, policy
-//! decisions, usage estimates, updater state); those are added as their
+//! migrations, and repositories for the durable data groups implemented so
+//! far: settings, role profiles, events, audit records, provider capability
+//! state, workflow templates/runs, worktree allocations, quality-gate
+//! results, and review findings. S4.4 lists additional data groups (CI/CD
+//! records, policy decisions, usage estimates, updater state); those are added as their
 //! owning phase's crate gains real logic to back them (each such crate's
 //! own doc comment already names its target phase) rather than
 //! speculatively schema'd now against a design those phases have not made
@@ -42,12 +41,14 @@ mod audit;
 mod events;
 mod migrations;
 mod providers;
+mod quality_review;
 mod role_profiles;
 mod settings;
 mod templates;
 mod workflow;
 mod worktree_leases;
 
+pub use quality_review::{QualityGateRecord, ReviewFindingRecord};
 pub use templates::WorkflowTemplateRecord;
 pub use workflow::{
     ApprovalRecord, CheckpointRecord, NodeAttemptRecord, NodeRunRecord, WorkflowRunRecord,
@@ -68,10 +69,17 @@ pub enum StorageError {
     Serialization(#[from] serde_json::Error),
     #[error("filesystem error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("storage worker task failed (cancelled={cancelled}, panicked={panicked})")]
+    WorkerJoin { cancelled: bool, panicked: bool },
     #[error("stored {entity} value {value:?} is not valid: {detail}")]
     CorruptStoredValue {
         entity: &'static str,
         value: String,
+        detail: String,
+    },
+    #[error("cannot store invalid {entity}: {detail}")]
+    InvalidRecord {
+        entity: &'static str,
         detail: String,
     },
     #[error("no role profile found with id {0}")]
@@ -88,6 +96,15 @@ pub enum StorageError {
     ApprovalNotPending(nacc_domain::ApprovalId),
     #[error("workflow template `{0}` is built in and cannot be replaced or deleted from the GUI")]
     BuiltinTemplateProtected(String),
+}
+
+impl From<tokio::task::JoinError> for StorageError {
+    fn from(error: tokio::task::JoinError) -> Self {
+        Self::WorkerJoin {
+            cancelled: error.is_cancelled(),
+            panicked: error.is_panic(),
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -174,8 +191,7 @@ impl Database {
             conn.execute("VACUUM INTO ?1", [dest_str])?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Restore a database previously written by [`Self::backup_to`]: copy
@@ -198,8 +214,7 @@ impl Database {
             std::fs::copy(&backup_path, &target_path_owned)?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")?;
+        .await??;
         Database::open(target_path)
     }
 
@@ -283,5 +298,16 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn storage_worker_failure_is_typed_instead_of_panicking_the_caller() {
+        let result = tokio::task::spawn_blocking(|| -> Result<()> {
+            panic!("intentional storage worker panic");
+        })
+        .await
+        .map_err(StorageError::from);
+
+        assert!(matches!(result, Err(StorageError::WorkerJoin { .. })));
     }
 }

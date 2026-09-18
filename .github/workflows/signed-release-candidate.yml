@@ -1,0 +1,199 @@
+# Builds a production-signable Windows release candidate without publishing it.
+# Heavy packaging stays in GitHub Actions. The job is intentionally manual and
+# bound to the `production-release` environment so repository owners can require
+# human reviewers before its signing secrets are exposed.
+#
+# Required production-release environment/repository secrets:
+#   TAURI_SIGNING_PRIVATE_KEY
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#   WINDOWS_CODESIGN_PFX_BASE64
+#   WINDOWS_CODESIGN_PFX_PASSWORD
+#
+# This workflow NEVER creates a GitHub Release and NEVER updates the live
+# updater channel. Publishing remains a separate, explicit human decision after
+# clean-machine and updater verification.
+
+name: signed-release-candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag whose version must match src-tauri/tauri.conf.json (for example v0.1.0)"
+        required: true
+        type: string
+      release_notes:
+        description: "Release notes embedded in latest.json"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-signed-windows-candidate:
+    name: Signed Windows release candidate
+    runs-on: windows-latest
+    timeout-minutes: 60
+    environment: production-release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@1.96.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - name: Validate requested tag and required signing material
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $version = [string]$config.version
+          $tagVersion = $env:RELEASE_TAG.TrimStart('v')
+          if ($tagVersion -ne $version) {
+            throw "release_tag version '$tagVersion' does not match tauri.conf.json version '$version'"
+          }
+
+          foreach ($name in @(
+            'TAURI_SIGNING_PRIVATE_KEY',
+            'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
+            'WINDOWS_CODESIGN_PFX_BASE64',
+            'WINDOWS_CODESIGN_PFX_PASSWORD'
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "required signing secret '$name' is missing"
+            }
+          }
+
+          "NACC_RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Import Windows Authenticode certificate for this runner only
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'nacc-code-signing.pfx'
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64)
+          [IO.File]::WriteAllBytes($pfxPath, $bytes)
+          try {
+            $password = ConvertTo-SecureString $env:WINDOWS_CODESIGN_PFX_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password -Exportable:$false
+            if (-not $cert -or -not $cert.HasPrivateKey) {
+              throw 'code-signing certificate import did not produce a certificate with a private key'
+            }
+            "WINDOWS_CODESIGN_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+          } finally {
+            Remove-Item $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Create temporary Tauri release override
+        shell: pwsh
+        run: |
+          $releaseConfig = @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $env:WINDOWS_CODESIGN_THUMBPRINT
+                digestAlgorithm = 'sha256'
+                timestampUrl = 'http://timestamp.digicert.com'
+              }
+            }
+          }
+          $path = Join-Path $env:RUNNER_TEMP 'tauri.release.conf.json'
+          $releaseConfig | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding utf8NoBOM
+          "TAURI_RELEASE_CONFIG=$path" >> $env:GITHUB_ENV
+
+      - name: Build signed Windows installer and updater artifacts
+        shell: pwsh
+        env:
+          CI: true
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --config "$env:TAURI_RELEASE_CONFIG"
+
+      - name: Verify Authenticode and updater artifact presence
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem target/release/bundle/nsis/*.exe -ErrorAction Stop)
+          if ($installers.Count -lt 1) { throw 'NSIS installer was not produced' }
+          foreach ($installer in $installers) {
+            $signature = Get-AuthenticodeSignature $installer.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "Authenticode verification failed for $($installer.Name): $($signature.Status)"
+            }
+          }
+
+          $archives = @(Get-ChildItem target/release/bundle/nsis/*.nsis.zip -ErrorAction Stop)
+          $signatures = @(Get-ChildItem target/release/bundle/nsis/*.nsis.zip.sig -ErrorAction Stop)
+          if ($archives.Count -ne 1 -or $signatures.Count -ne 1) {
+            throw "expected exactly one NSIS updater archive and one signature; got $($archives.Count) archive(s), $($signatures.Count) signature(s)"
+          }
+          if ($archives[0].Length -le 0 -or $signatures[0].Length -le 0) {
+            throw 'updater archive or signature is empty'
+          }
+
+      - name: Generate static latest.json candidate
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          $archive = @(Get-ChildItem target/release/bundle/nsis/*.nsis.zip -ErrorAction Stop)[0]
+          $signatureFile = @(Get-ChildItem target/release/bundle/nsis/*.nsis.zip.sig -ErrorAction Stop)[0]
+          $signature = (Get-Content $signatureFile.FullName -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($signature)) { throw 'updater signature is empty' }
+
+          $assetUrl = "https://github.com/${{ github.repository }}/releases/download/$env:RELEASE_TAG/$($archive.Name)"
+          $manifest = [ordered]@{
+            version = $env:NACC_RELEASE_VERSION
+            notes = $env:RELEASE_NOTES
+            pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            platforms = [ordered]@{
+              'windows-x86_64-nsis' = [ordered]@{
+                url = $assetUrl
+                signature = $signature
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path latest.json -Encoding utf8NoBOM
+          $parsed = Get-Content latest.json -Raw | ConvertFrom-Json
+          if ($parsed.version -ne $env:NACC_RELEASE_VERSION) { throw 'latest.json version validation failed' }
+          if (-not $parsed.platforms.'windows-x86_64-nsis'.signature) { throw 'latest.json signature validation failed' }
+
+      - name: Upload signed candidate for human verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: nacc-signed-release-candidate-${{ inputs.release_tag }}
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/nsis/*.nsis.zip
+            target/release/bundle/nsis/*.nsis.zip.sig
+            latest.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove imported signing certificate
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_THUMBPRINT)) {
+            Remove-Item "Cert:\CurrentUser\My\$env:WINDOWS_CODESIGN_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+          }

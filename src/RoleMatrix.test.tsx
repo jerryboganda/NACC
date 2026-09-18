@@ -12,8 +12,8 @@ import RoleMatrix from "./RoleMatrix";
 
 const profile: RoleProfileView = {
   id: "test-role", name: "Explorer", role_kind: { custom: "Investigator" },
-  provider_id: "claude", model_id: "user-configured-model", thinking_mode: "on",
-  reasoning_level: "high", permission_profile: "read_only", enabled: true,
+  provider_id: "claude", model_id: null, thinking_mode: "auto",
+  reasoning_level: "auto", permission_profile: "read_only", enabled: true,
   account_label: null, fallbacks: [],
   created_at_millis: "9007199254740993", updated_at_millis: "9007199254740994",
 };
@@ -69,6 +69,9 @@ describe("Role Matrix", () => {
     expect(screen.getByLabelText("Thinking")).toBeDisabled();
     expect(screen.getByLabelText("Reasoning effort")).toBeDisabled();
     expect(screen.queryByRole("option", { name: /temporary danger/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "copilot" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "antigravity" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "opencode" })).not.toBeInTheDocument();
   });
 
   it("creates an unassigned profile through the typed command", async () => {
@@ -115,6 +118,7 @@ describe("Role Matrix", () => {
     // The gating is model-aware: choose provider AND model, then the
     // reasoning control carries exactly the verified levels (S10.1/S10.2).
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "codex" } });
+    await screen.findByRole("option", { name: "gpt-5-codex" });
     fireEvent.change(screen.getByLabelText("Requested model ID"), { target: { value: "gpt-5-codex" } });
     const reasoning = await screen.findByLabelText("Reasoning effort");
     await waitFor(() => expect(reasoning).toBeEnabled());
@@ -127,7 +131,7 @@ describe("Role Matrix", () => {
     }));
   });
 
-  it("changes provider independently and preserves custom role, model, reasoning and enabled state", async () => {
+  it("changes provider while clearing provider-specific model controls and preserving role and enabled state", async () => {
     mocks.listRoleProfiles.mockResolvedValue(ok([profile]));
     mocks.updateRoleProfile.mockImplementation(async (id, update) => ok({ profile: { ...profile, id, ...update } }));
     render(<RoleMatrix />);
@@ -136,11 +140,23 @@ describe("Role Matrix", () => {
     fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "codex" } });
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     await waitFor(() => expect(mocks.updateRoleProfile).toHaveBeenCalledExactlyOnceWith(profile.id, {
-      name: profile.name, role_kind: profile.role_kind, provider_id: "codex", model_id: profile.model_id,
-      thinking_mode: "on", reasoning_level: "high", permission_profile: "read_only",
+      name: profile.name, role_kind: profile.role_kind, provider_id: "codex", model_id: null,
+      thinking_mode: "auto", reasoning_level: "auto", permission_profile: "read_only",
       account_label: null, fallbacks: [], enabled: true,
     }));
     await screen.findByText("New role profile");
+  });
+
+  it("renders an unsupported legacy provider only as a repairable disabled value", async () => {
+    const legacy = { ...profile, provider_id: "copilot" as const, model_id: "legacy-model" };
+    mocks.listRoleProfiles.mockResolvedValue(ok([legacy]));
+    render(<RoleMatrix />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit Explorer" }));
+    expect(screen.getByRole("option", { name: "copilot — unavailable in this build" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "legacy-model — unverified legacy value" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("copilot is not runnable in this build");
+    expect(mocks.updateRoleProfile).not.toHaveBeenCalled();
   });
 
   it("persists disabling and requires confirmation before deletion", async () => {

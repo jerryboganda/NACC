@@ -235,11 +235,60 @@ ALTER TABLE role_profiles ADD COLUMN account_label TEXT;
 ALTER TABLE role_profiles ADD COLUMN fallbacks_json TEXT NOT NULL DEFAULT '[]';
 "#;
 
+/// V8: Phase 9's deterministic quality evidence and structured review
+/// findings become durable, append-only workflow evidence. The app exposes
+/// bounded read-only IPC over these rows; creation stays in privileged
+/// backend paths so the webview cannot fabricate acceptance evidence.
+const V8_QUALITY_AND_REVIEW_EVIDENCE: &str = r#"
+CREATE TABLE quality_gate_results (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_run_id         TEXT NOT NULL,
+    node_run_id             TEXT NOT NULL,
+    attempt_id              TEXT,
+    gate                    TEXT NOT NULL,
+    command                 TEXT NOT NULL,
+    passed                  INTEGER NOT NULL CHECK (passed IN (0, 1)),
+    exit_code               INTEGER,
+    timed_out               INTEGER NOT NULL CHECK (timed_out IN (0, 1)),
+    duration_ms             INTEGER NOT NULL CHECK (duration_ms >= 0),
+    log_tail                TEXT NOT NULL,
+    created_at_millis       INTEGER NOT NULL CHECK (created_at_millis >= 0)
+);
+
+CREATE INDEX idx_quality_gate_results_workflow_run
+    ON quality_gate_results(workflow_run_id, created_at_millis DESC);
+CREATE INDEX idx_quality_gate_results_node_run
+    ON quality_gate_results(node_run_id, created_at_millis DESC);
+CREATE INDEX idx_quality_gate_results_created_at
+    ON quality_gate_results(created_at_millis DESC);
+
+CREATE TABLE review_findings (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_run_id         TEXT NOT NULL,
+    node_run_id             TEXT NOT NULL,
+    attempt_id              TEXT,
+    node_key                TEXT NOT NULL,
+    file                    TEXT NOT NULL,
+    line                    INTEGER CHECK (line IS NULL OR line >= 1),
+    severity                TEXT NOT NULL CHECK (severity IN ('blocker', 'major', 'minor', 'note')),
+    summary                 TEXT NOT NULL,
+    evidence                TEXT NOT NULL,
+    created_at_millis       INTEGER NOT NULL CHECK (created_at_millis >= 0)
+);
+
+CREATE INDEX idx_review_findings_workflow_run
+    ON review_findings(workflow_run_id, created_at_millis DESC);
+CREATE INDEX idx_review_findings_node_run
+    ON review_findings(node_run_id, created_at_millis DESC);
+CREATE INDEX idx_review_findings_created_at
+    ON review_findings(created_at_millis DESC);
+"#;
+
 /// The schema version a fresh database lands on. Test-only: the lib build
 /// never needs the number, and a dead-in-lib constant would trip the
 /// workspace's `-D warnings` gate.
 #[cfg(test)]
-pub(crate) const LATEST_VERSION: u32 = 7;
+pub(crate) const LATEST_VERSION: u32 = 8;
 
 pub(crate) fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
@@ -250,6 +299,7 @@ pub(crate) fn migrations() -> Migrations<'static> {
         M::up(V5_WORKFLOW_STATE),
         M::up(V6_WORKFLOW_TEMPLATES),
         M::up(V7_ROLE_ACCOUNTS_AND_FALLBACKS),
+        M::up(V8_QUALITY_AND_REVIEW_EVIDENCE),
     ])
 }
 
@@ -276,7 +326,8 @@ mod tests {
         let version = migrations().current_version(&conn).unwrap();
         assert!(
             matches!(version, SchemaVersion::Inside(n) if n.get() == super::LATEST_VERSION as usize),
-            "expected schema version 6, got {version:?}"
+            "expected schema version {}, got {version:?}",
+            super::LATEST_VERSION
         );
     }
 
@@ -450,6 +501,52 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tables, 1, "V5 must have created the workflow-runs table");
+        assert!(matches!(
+            migrations().current_version(&conn).unwrap(),
+            SchemaVersion::Inside(n) if n.get() == super::LATEST_VERSION as usize
+        ));
+    }
+
+    #[test]
+    fn a_database_left_at_v7_upgrades_to_v8_without_losing_data() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let up_to_v7 = Migrations::new(vec![
+            M::up(V1_INITIAL_SCHEMA),
+            M::up(V2_CORRELATION_INDEXES),
+            M::up(V3_WORKTREE_LEASES),
+            M::up(V4_PROVIDER_CAPABILITIES),
+            M::up(V5_WORKFLOW_STATE),
+            M::up(V6_WORKFLOW_TEMPLATES),
+            M::up(V7_ROLE_ACCOUNTS_AND_FALLBACKS),
+        ]);
+        up_to_v7.to_latest(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at_millis) VALUES ('schema', 'v7', 8)",
+            [],
+        )
+        .unwrap();
+
+        migrations().to_latest(&mut conn).unwrap();
+
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = 'schema'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("a row written at V7 must survive the V8 upgrade");
+        assert_eq!(value, "v7");
+
+        for table in ["quality_gate_results", "review_findings"] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "V8 must create {table}");
+        }
         assert!(matches!(
             migrations().current_version(&conn).unwrap(),
             SchemaVersion::Inside(n) if n.get() == super::LATEST_VERSION as usize

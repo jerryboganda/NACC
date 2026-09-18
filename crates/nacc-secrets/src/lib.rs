@@ -98,6 +98,51 @@ pub fn redact(text: &str, secret_values: &[String]) -> (String, usize) {
     (text, value_hits + token_hits)
 }
 
+/// Redact every string value in a JSON payload while preserving its shape.
+///
+/// Provider events and diagnostic records are persisted as structured JSON,
+/// so redacting at this boundary prevents token-shaped values from reaching
+/// durable storage without flattening the payload into an opaque string.
+pub fn redact_json_value(value: &mut serde_json::Value, secret_values: &[String]) -> usize {
+    match value {
+        serde_json::Value::String(text) => {
+            let (redacted, count) = redact(text, secret_values);
+            *text = redacted;
+            count
+        }
+        serde_json::Value::Array(values) => values
+            .iter_mut()
+            .map(|value| redact_json_value(value, secret_values))
+            .sum(),
+        serde_json::Value::Object(values) => values
+            .values_mut()
+            .map(|value| redact_json_value(value, secret_values))
+            .sum(),
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => 0,
+    }
+}
+
+#[cfg(test)]
+mod json_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn structured_json_is_redacted_without_losing_shape() {
+        let mut value = serde_json::json!({
+            "message": "before secret-value after",
+            "nested": ["unchanged", 7, true]
+        });
+
+        let count = redact_json_value(&mut value, &["secret-value".to_string()]);
+
+        assert_eq!(count, 1);
+        assert!(!value["message"].as_str().unwrap().contains("secret-value"));
+        assert_eq!(value["nested"][0], "unchanged");
+        assert_eq!(value["nested"][1], 7);
+        assert_eq!(value["nested"][2], true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,7 +9,10 @@ const roles: Exclude<RoleKind, object>[] = [
   "performance_reviewer", "documentation_writer", "refactor_migration_specialist",
   "ci_cd_investigator", "integrator", "release_manager",
 ];
-const providers: ProviderId[] = ["claude", "codex", "antigravity", "copilot", "opencode"];
+// Only adapters actually registered by the native runtime are selectable.
+// Unsupported legacy values can still be rendered while editing so the
+// user can repair old rows, but they are never offered as runnable choices.
+const runnableProviders: ProviderId[] = ["claude", "codex"];
 const permissions: CreateRoleProfileArgs["permission_profile"][] = [
   "read_only", "plan_only", "autonomous_worktree", "repository_maintainer", "ci_maintainer", "release_candidate",
 ];
@@ -20,7 +23,7 @@ const emptyProfile = (): CreateRoleProfileArgs => ({
 });
 const label = (value: string) => value.replaceAll("_", " ");
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
-const probeable: ProviderId[] = ["claude", "codex"];
+const isRunnableProvider = (provider: ProviderId): boolean => runnableProviders.includes(provider);
 
 export default function RoleMatrix() {
   const [profiles, setProfiles] = useState<RoleProfileView[]>([]);
@@ -65,7 +68,7 @@ export default function RoleMatrix() {
   // (master plan S10.1/S10.2, acceptance 11).
   const provider = typeof draft.provider_id === "string" ? draft.provider_id : null;
   useEffect(() => {
-    if (!provider || !probeable.includes(provider)) return;
+    if (!provider || !isRunnableProvider(provider)) return;
     let cancelled = false;
     void (async () => {
       const result = await commands.latestProviderCapabilities({ provider_id: provider as ProviderId });
@@ -74,6 +77,23 @@ export default function RoleMatrix() {
     })();
     return () => { cancelled = true; };
   }, [provider]);
+
+  const fallbackProviders = [...new Set(draft.fallbacks.map(fallback => fallback.provider_id)
+    .filter(isRunnableProvider))];
+  const fallbackProviderKey = fallbackProviders.join("|");
+  useEffect(() => {
+    if (!fallbackProviderKey) return;
+    let cancelled = false;
+    void Promise.all(fallbackProviderKey.split("|").map(async providerId => {
+      const fallbackProvider = providerId as ProviderId;
+      const result = await commands.latestProviderCapabilities({ provider_id: fallbackProvider });
+      if (cancelled) return;
+      setCaps(current => ({ ...current, [fallbackProvider]: result.status === "ok" ? result.data : null }));
+    }));
+    return () => { cancelled = true; };
+  }, [fallbackProviderKey]);
+
+  const verifiedModels = provider && caps[provider]?.models ? caps[provider]!.models : [];
   const modelCaps = provider && draft.model_id && caps[provider]
     ? caps[provider]!.models.find(model => model.id === draft.model_id)
     : undefined;
@@ -105,11 +125,37 @@ export default function RoleMatrix() {
       setError("Profile name and custom role name must not be blank.");
       return;
     }
+    if (provider && !isRunnableProvider(provider)) {
+      setError(`Provider ${provider} is not runnable in this build. Select Claude, Codex, or Unassigned.`);
+      return;
+    }
+    if (draft.model_id && !provider) {
+      setError("An explicit model requires a primary provider.");
+      return;
+    }
+    if (draft.model_id && !modelCaps) {
+      setError(`Model ${draft.model_id} is not verified for ${provider}. Run “Check capabilities” in Providers and select a verified model.`);
+      return;
+    }
     if (reasoningVerified && !reasoningChoices.includes(draft.reasoning_level)) {
       // S10.1: "If the selected model does not support the requested value,
       // block save" -- never silently downgrade.
       setError(`Model ${draft.model_id} does not list reasoning level "${label(draft.reasoning_level)}". Supported: ${reasoningChoices.map(label).join(", ")}.`);
       return;
+    }
+    for (const [index, fallback] of draft.fallbacks.entries()) {
+      if (!isRunnableProvider(fallback.provider_id)) {
+        setError(`Fallback ${index + 1} provider ${fallback.provider_id} is not runnable in this build.`);
+        return;
+      }
+      if (fallback.model_id) {
+        const snapshot = caps[fallback.provider_id];
+        const verified = snapshot?.models.some(model => model.id === fallback.model_id) ?? false;
+        if (!verified) {
+          setError(`Fallback ${index + 1} model ${fallback.model_id} is not verified for ${fallback.provider_id}. Run “Check capabilities” first.`);
+          return;
+        }
+      }
     }
     await mutate(async () => {
       const args: CreateRoleProfileArgs = {
@@ -129,7 +175,7 @@ export default function RoleMatrix() {
       setProfiles(current => editing
         ? current.map(profile => profile.id === editing.id ? result.data.profile : profile)
         : [...current, result.data.profile]);
-      setNotice("Role profile saved to local storage. Provider settings are not yet validated.");
+      setNotice("Role profile saved. Provider and explicit model assignments were validated against runnable adapters and verified capability snapshots.");
       reset();
     });
   }
@@ -145,7 +191,7 @@ export default function RoleMatrix() {
     <button type="button" disabled={busy || loading} onClick={() => void load()}>Refresh profiles</button>
     {loading ? <p role="status">Loading role profiles…</p> : <>
       {profiles.length === 0 ? <p>No role profiles saved.</p> : <div className="role-table-wrap">
-        <table><caption>Saved assignments — settings not yet validated</caption>
+        <table><caption>Saved role assignments</caption>
           <thead><tr><th scope="col">Name / role</th><th scope="col">Provider / model</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
           <tbody>{profiles.map(profile => <tr key={profile.id}>
             <th scope="row">{profile.name}<small>{typeof profile.role_kind === "string" ? label(profile.role_kind) : profile.role_kind.custom}</small></th>
@@ -188,10 +234,28 @@ export default function RoleMatrix() {
           {roles.map(role => <option key={role} value={role}>{label(role)}</option>)}<option value="custom">Custom role</option>
         </select></label>
         {typeof draft.role_kind === "object" && <label>Custom role name<input required value={draft.role_kind.custom} onChange={event => setDraft({ ...draft, role_kind: { custom: event.target.value } })} /></label>}
-        <label>Provider<select value={draft.provider_id ?? ""} onChange={event => setDraft({ ...draft, provider_id: event.target.value ? event.target.value as ProviderId : null })}>
-          <option value="">Unassigned</option>{providers.map(provider => <option key={provider} value={provider}>{provider}</option>)}
+        <label>Provider<select value={draft.provider_id ?? ""} onChange={event => setDraft({
+          ...draft,
+          provider_id: event.target.value ? event.target.value as ProviderId : null,
+          model_id: null,
+          thinking_mode: "auto",
+          reasoning_level: "auto",
+        })}>
+          <option value="">Unassigned</option>
+          {provider && !isRunnableProvider(provider) && <option value={provider} disabled>{provider} — unavailable in this build</option>}
+          {runnableProviders.map(runnable => <option key={runnable} value={runnable}>{runnable}</option>)}
         </select></label>
-        <label>Requested model ID<input aria-describedby="capability-note" value={draft.model_id ?? ""} onChange={event => setDraft({ ...draft, model_id: event.target.value || null })} /></label>
+        <label>Requested model ID<select aria-describedby="capability-note" value={draft.model_id ?? ""} onChange={event => setDraft({
+          ...draft,
+          model_id: event.target.value || null,
+          thinking_mode: "auto",
+          reasoning_level: "auto",
+        })}>
+          <option value="">Provider default</option>
+          {draft.model_id && !verifiedModels.some(model => model.id === draft.model_id)
+            && <option value={draft.model_id} disabled>{draft.model_id} — unverified legacy value</option>}
+          {verifiedModels.map(model => <option key={model.id} value={model.id}>{model.display_name}</option>)}
+        </select></label>
         {thinkingManaged
           ? <label>Thinking<select disabled aria-describedby="capability-note" value={modelCaps!.thinking}><option value={modelCaps!.thinking}>{label(modelCaps!.thinking)} — per this model's verified capabilities</option></select></label>
           : <label>Thinking<select disabled={!modelCaps} aria-describedby="capability-note" value={draft.thinking_mode} onChange={event => setDraft({ ...draft, thinking_mode: event.target.value as CreateRoleProfileArgs["thinking_mode"] })}>
@@ -214,16 +278,23 @@ export default function RoleMatrix() {
           {draft.fallbacks.map((fallback, index) => <div className="role-actions" key={index}>
             <select aria-label={`Fallback ${index + 1} provider`} value={fallback.provider_id} onChange={event => {
               const fallbacks = [...draft.fallbacks];
-              fallbacks[index] = { ...fallback, provider_id: event.target.value as ProviderId };
+              fallbacks[index] = { ...fallback, provider_id: event.target.value as ProviderId, model_id: null };
               setDraft({ ...draft, fallbacks });
             }}>
-              {providers.map(p => <option key={p} value={p}>{p}</option>)}
+              {!isRunnableProvider(fallback.provider_id)
+                && <option value={fallback.provider_id} disabled>{fallback.provider_id} — unavailable in this build</option>}
+              {runnableProviders.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
-            <input aria-label={`Fallback ${index + 1} model (optional)`} placeholder="Model (optional)" value={fallback.model_id ?? ""} onChange={event => {
+            <select aria-label={`Fallback ${index + 1} model (optional)`} value={fallback.model_id ?? ""} onChange={event => {
               const fallbacks = [...draft.fallbacks];
               fallbacks[index] = { ...fallback, model_id: event.target.value || null };
               setDraft({ ...draft, fallbacks });
-            }} />
+            }}>
+              <option value="">Provider default</option>
+              {fallback.model_id && !caps[fallback.provider_id]?.models.some(model => model.id === fallback.model_id)
+                && <option value={fallback.model_id} disabled>{fallback.model_id} — unverified legacy value</option>}
+              {caps[fallback.provider_id]?.models.map(model => <option key={model.id} value={model.id}>{model.display_name}</option>)}
+            </select>
             <input aria-label={`Fallback ${index + 1} reason`} placeholder="Why this fallback" value={fallback.reason} onChange={event => {
               const fallbacks = [...draft.fallbacks];
               fallbacks[index] = { ...fallback, reason: event.target.value };

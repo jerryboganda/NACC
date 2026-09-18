@@ -138,8 +138,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn update_workflow_run(&self, run: &WorkflowRunRecord) -> Result<()> {
@@ -162,8 +161,7 @@ impl Database {
             }
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn get_workflow_run(&self, id: WorkflowRunId) -> Result<Option<WorkflowRunRecord>> {
@@ -183,8 +181,7 @@ impl Database {
                 None => Ok(None),
             }
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Runs in any of `states`, newest first. Recovery uses this with
@@ -216,8 +213,7 @@ impl Database {
             }
             Ok(out)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Every run for a project, newest first, in any state.
@@ -242,8 +238,7 @@ impl Database {
             }
             Ok(out)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     // --- node runs ----------------------------------------------------
@@ -273,8 +268,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn update_node_run(&self, node: &NodeRunRecord) -> Result<()> {
@@ -299,8 +293,7 @@ impl Database {
             }
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn list_node_runs(&self, run_id: WorkflowRunId) -> Result<Vec<NodeRunRecord>> {
@@ -320,8 +313,7 @@ impl Database {
             }
             Ok(out)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     // --- attempts -----------------------------------------------------
@@ -358,8 +350,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn finish_node_attempt(
@@ -385,8 +376,7 @@ impl Database {
             }
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn list_node_attempts(
@@ -411,8 +401,7 @@ impl Database {
             }
             Ok(out)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     // --- approvals ----------------------------------------------------
@@ -442,8 +431,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Record a human decision. Only a pending approval can be decided:
@@ -469,8 +457,7 @@ impl Database {
             }
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn list_approvals(&self, run_id: WorkflowRunId) -> Result<Vec<ApprovalRecord>> {
@@ -490,8 +477,7 @@ impl Database {
             }
             Ok(out)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     // --- checkpoints --------------------------------------------------
@@ -525,8 +511,7 @@ impl Database {
             )?;
             Ok(next as u32)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn list_checkpoints(&self, run_id: WorkflowRunId) -> Result<Vec<CheckpointRecord>> {
@@ -552,8 +537,7 @@ impl Database {
             }
             Ok(out)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Delete a run and everything attached to it. Used by tests and by an
@@ -579,8 +563,7 @@ impl Database {
             transaction.commit()?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 }
 
@@ -697,6 +680,7 @@ mod tests {
             retryable: true,
             requires_approval: false,
             timeout_secs: None,
+            quality_gates: vec![],
             fallbacks: vec![],
         }
     }

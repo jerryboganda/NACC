@@ -45,6 +45,47 @@ pub fn validate(nodes: &[WorkflowNode]) -> Result<()> {
                 detail: format!("node `{}` depends on itself", node.key),
             });
         }
+        for (gate_index, gate) in node.quality_gates.iter().enumerate() {
+            if gate.name.trim().is_empty() {
+                return Err(OrchestratorError::InvalidGraph {
+                    detail: format!("node `{}` has a quality gate with an empty name", node.key),
+                });
+            }
+            if gate
+                .argv
+                .first()
+                .map(|program| program.trim().is_empty())
+                .unwrap_or(true)
+            {
+                return Err(OrchestratorError::InvalidGraph {
+                    detail: format!(
+                        "node `{}` quality gate `{}` has no executable",
+                        node.key, gate.name
+                    ),
+                });
+            }
+            if gate.timeout_secs == 0 {
+                return Err(OrchestratorError::InvalidGraph {
+                    detail: format!(
+                        "node `{}` quality gate `{}` has a zero-second timeout",
+                        node.key, gate.name
+                    ),
+                });
+            }
+            if node
+                .quality_gates
+                .iter()
+                .skip(gate_index + 1)
+                .any(|other| other.name == gate.name)
+            {
+                return Err(OrchestratorError::InvalidGraph {
+                    detail: format!(
+                        "node `{}` has duplicate quality gate name `{}`",
+                        node.key, gate.name
+                    ),
+                });
+            }
+        }
         for dependency in &node.depends_on {
             if !nodes.iter().any(|other| &other.key == dependency) {
                 return Err(OrchestratorError::InvalidGraph {
@@ -228,6 +269,7 @@ mod tests {
             retryable: true,
             requires_approval: false,
             timeout_secs: None,
+            quality_gates: vec![],
             fallbacks: vec![],
         }
     }
@@ -274,6 +316,35 @@ mod tests {
             validate(&[node("a", &["b", "b"]), node("b", &[])]).is_ok(),
             "a repeated dependency is redundant, not invalid"
         );
+    }
+
+    #[test]
+    fn validation_rejects_malformed_or_duplicate_quality_gates() {
+        use nacc_domain::QualityGateSpec;
+
+        let mut subject = node("quality", &[]);
+        subject.quality_gates = vec![QualityGateSpec {
+            name: " ".into(),
+            argv: vec!["cargo".into(), "test".into()],
+            timeout_secs: 30,
+            required: true,
+        }];
+        assert!(validate(&[subject.clone()]).is_err());
+
+        subject.quality_gates[0].name = "tests".into();
+        subject.quality_gates[0].argv.clear();
+        assert!(validate(&[subject.clone()]).is_err());
+
+        subject.quality_gates[0].argv = vec![" ".into()];
+        assert!(validate(&[subject.clone()]).is_err());
+
+        subject.quality_gates[0].argv = vec!["cargo".into(), "test".into()];
+        subject.quality_gates[0].timeout_secs = 0;
+        assert!(validate(&[subject.clone()]).is_err());
+
+        subject.quality_gates[0].timeout_secs = 30;
+        subject.quality_gates.push(subject.quality_gates[0].clone());
+        assert!(validate(&[subject]).is_err());
     }
 
     #[test]

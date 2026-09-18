@@ -7,13 +7,17 @@
 //! commands. It must not become a hidden Node.js backend." Everything
 //! privileged lives in this crate and the ones it depends on.
 
+mod audit;
 mod diagnostics;
 mod executor;
+mod github;
 mod providers;
+mod quality_review;
 mod role_profiles;
 mod routing;
 mod setup;
 mod workflows;
+mod worktrees;
 
 use tauri::Manager;
 use tauri_specta::{collect_commands, Builder};
@@ -80,6 +84,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         providers::list_provider_installations,
         providers::check_provider_auth,
         workflows::list_workflow_templates,
+        workflows::get_workflow_template,
         workflows::start_workflow_run,
         workflows::get_workflow_run,
         workflows::list_workflow_runs,
@@ -94,6 +99,22 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         providers::latest_provider_capabilities,
         setup::check_prerequisites,
         setup::check_workspace,
+        github::get_github_auth_status,
+        github::get_github_repository,
+        github::list_github_branches,
+        github::list_github_pull_requests,
+        github::list_github_check_runs,
+        github::list_github_workflow_runs,
+        github::list_github_workflow_jobs,
+        github::get_github_failed_run_evidence,
+        github::list_github_artifacts,
+        github::list_github_environments,
+        github::list_github_pending_deployments,
+        github::rerun_failed_github_workflow,
+        worktrees::list_worktree_leases,
+        audit::list_audit_records,
+        quality_review::list_quality_gate_results,
+        quality_review::list_review_findings,
     ])
 }
 

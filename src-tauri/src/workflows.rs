@@ -47,6 +47,15 @@ pub struct WorkflowTemplateView {
     pub is_built_in: bool,
 }
 
+#[derive(Clone, Debug, Serialize, specta::Type)]
+pub struct WorkflowTemplateDefinitionView {
+    pub name: String,
+    pub description: String,
+    pub nodes: Vec<nacc_domain::WorkflowNode>,
+    pub version: u32,
+    pub is_built_in: bool,
+}
+
 fn template_view(
     name: &str,
     description: &str,
@@ -293,7 +302,17 @@ pub(crate) async fn release_run_lease(
     routing: &crate::routing::RoleMatrixRouting,
     run_id: WorkflowRunId,
 ) {
-    let lease = leases.lock().expect("run leases poisoned").remove(&run_id);
+    let lease = match leases.lock() {
+        Ok(mut leases) => leases.remove(&run_id),
+        Err(_) => {
+            tracing::error!(
+                run = %run_id,
+                "run lease registry is poisoned; leaving the durable lease for startup reconciliation"
+            );
+            routing.clear_run_workspace(run_id);
+            return;
+        }
+    };
     routing.clear_run_workspace(run_id);
     let Some(lease) = lease else { return };
     let repo = match nacc_git::GitRepository::open(&lease.path).await {
@@ -402,6 +421,45 @@ pub async fn list_workflow_templates(
             )
         })
         .collect())
+}
+
+/// Load the complete graph for one template so the GUI can inspect or edit
+/// it without reconstructing node settings from the summary list.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_workflow_template(
+    args: TemplateNameArgs,
+    state: State<'_, AppState>,
+) -> Result<WorkflowTemplateDefinitionView, String> {
+    let name = args.name.trim();
+    if name.is_empty() {
+        return Err("template name must not be empty".to_string());
+    }
+
+    if let Some(record) = state
+        .storage
+        .get_workflow_template(name)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(WorkflowTemplateDefinitionView {
+            name: record.name,
+            description: record.description,
+            nodes: record.definition.nodes,
+            version: record.version,
+            is_built_in: record.is_built_in,
+        });
+    }
+
+    let template =
+        built_in_template(name).ok_or_else(|| format!("unknown workflow template `{name}`"))?;
+    Ok(WorkflowTemplateDefinitionView {
+        name: template.name,
+        description: template.description,
+        nodes: template.nodes,
+        version: 1,
+        is_built_in: true,
+    })
 }
 
 /// Create or update a *custom* workflow template. The DAG is validated
@@ -565,7 +623,9 @@ pub async fn start_workflow_run(
                 state
                     .run_leases
                     .lock()
-                    .expect("run leases poisoned")
+                    .map_err(|_| {
+                        "run lease registry is unavailable after an internal failure".to_string()
+                    })?
                     .insert(snapshot.run.id, lease);
             }
             Err(err) => {

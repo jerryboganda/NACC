@@ -45,6 +45,15 @@ impl PolicyEngine {
         Self::default()
     }
 
+    /// Baseline guardrails that are always required for NACC-owned
+    /// privileged command execution. Resource-specific protected paths and
+    /// temporary grants are layered on by the caller.
+    pub fn baseline() -> Self {
+        Self::new()
+            .deny_command_fragment("push --force")
+            .deny_command_fragment("branch -D main")
+    }
+
     pub fn protect_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.protected_paths.push(path.into());
         self
@@ -125,11 +134,9 @@ mod tests {
     use super::*;
 
     fn engine() -> PolicyEngine {
-        PolicyEngine::new()
+        PolicyEngine::baseline()
             .protect_path(r"C:\Users\me\.ssh")
             .protect_path(r"D:\Projects\NACC")
-            .deny_command_fragment("push --force")
-            .deny_command_fragment("branch -D main")
     }
 
     #[test]

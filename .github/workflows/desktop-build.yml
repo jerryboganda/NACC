@@ -1,8 +1,13 @@
-# Manual Windows desktop packaging (master plan Phase 12's installer step).
+# Manual Windows desktop packaging evidence (master plan Phase 12).
 # workflow_dispatch only: a full Tauri bundle is exactly the kind of heavy
-# compute that must not run on developer machines or the production VPS.
-# The produced installers are UNSIGNED — signing requires the certificate
-# and procedure in docs/RELEASE-CHECKLIST.md, which is a human decision.
+# compute that belongs in GitHub Actions, not on developer machines or the
+# production VPS.
+#
+# tauri.conf.json intentionally has createUpdaterArtifacts=true. Tauri therefore
+# requires an updater signing key even for a non-release build. This workflow
+# creates a throwaway updater key only to prove the packaging contract; it is
+# never persisted or published. The uploaded NSIS installer is still NOT a
+# production release because it has no Windows Authenticode signature.
 
 name: desktop-build
 
@@ -11,7 +16,7 @@ on:
 
 jobs:
   build-windows:
-    name: Tauri build (NSIS, unsigned)
+    name: Tauri packaging evidence (NSIS, non-distributable)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -23,10 +28,37 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
-      - run: npx tauri build
+      - name: Generate ephemeral updater key for build evidence only
+        shell: pwsh
+        run: |
+          npx --yes @tauri-apps/cli signer generate -w $env:RUNNER_TEMP/nacc-build-evidence-key --password ""
+          $key = Get-Content $env:RUNNER_TEMP/nacc-build-evidence-key -Raw
+          "TAURI_SIGNING_PRIVATE_KEY=$key" >> $env:GITHUB_ENV
+          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" >> $env:GITHUB_ENV
+      - name: Build Windows NSIS package
+        run: npx tauri build
+        env:
+          CI: true
+      - name: Verify expected build outputs and discard ephemeral updater artifacts
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem target/release/bundle/nsis/*.exe -ErrorAction Stop)
+          if ($installers.Count -lt 1) { throw "NSIS installer was not produced" }
+
+          $updaterArchives = @(Get-ChildItem target/release/bundle/nsis/*.nsis.zip -ErrorAction Stop)
+          $updaterSignatures = @(Get-ChildItem target/release/bundle/nsis/*.nsis.zip.sig -ErrorAction Stop)
+          if ($updaterArchives.Count -lt 1 -or $updaterSignatures.Count -lt 1) {
+            throw "Tauri updater artifacts were not produced despite createUpdaterArtifacts=true"
+          }
+
+          # These updater files are signed by a throwaway key and MUST NOT be
+          # consumed by users or uploaded as release assets.
+          Remove-Item target/release/bundle/nsis/*.nsis.zip -Force
+          Remove-Item target/release/bundle/nsis/*.nsis.zip.sig -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: nacc-windows-unsigned
+          name: nacc-windows-unsigned-build-evidence
           path: |
             target/release/bundle/nsis/*.exe
           if-no-files-found: error
+          retention-days: 7

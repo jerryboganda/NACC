@@ -130,8 +130,7 @@ impl Database {
             )?;
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Persist every field of an existing lease. Used by drift detection,
@@ -170,8 +169,7 @@ impl Database {
             }
             Ok(())
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     pub async fn get_worktree_lease(&self, id: WorktreeLeaseId) -> Result<Option<WorktreeLease>> {
@@ -195,8 +193,7 @@ impl Database {
                 None => Ok(None),
             }
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 
     /// Every lease, newest first.
@@ -219,6 +216,85 @@ impl Database {
         let state_json = serde_json::to_string(&WorktreeState::Active)?;
         self.list_leases_where("WHERE state_json = ?1", Some(state_json))
             .await
+    }
+
+    /// Bounded retrieval of worktree leases, newest first (by created_at_millis DESC, rowid DESC).
+    ///
+    /// Filtering and `LIMIT` are evaluated directly inside SQLite so the desktop IPC layer
+    /// never loads the entire history of worktree leases into memory.
+    pub async fn list_recent_worktree_leases(
+        &self,
+        project_id: Option<ProjectId>,
+        active_only: bool,
+        limit: u32,
+    ) -> Result<Vec<WorktreeLease>> {
+        let conn = self.connection();
+        let state_json = serde_json::to_string(&WorktreeState::Active)?;
+        let limit = limit as i64;
+        let project_id_str = project_id.map(|id| id.to_string());
+
+        tokio::task::spawn_blocking(move || -> Result<Vec<WorktreeLease>> {
+            let conn = lock(&conn);
+            let mut leases = Vec::new();
+
+            match (project_id_str.as_deref(), active_only) {
+                (Some(pid), true) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, project_id, workflow_run_id, node_run_id, path, branch, \
+                                base_commit, head_commit, state_json, owner_process_id, \
+                                quarantine_reason, created_at_millis, updated_at_millis \
+                         FROM worktree_leases WHERE project_id = ?1 AND state_json = ?2 \
+                         ORDER BY created_at_millis DESC, rowid DESC LIMIT ?3",
+                    )?;
+                    let mut rows = stmt.query(rusqlite::params![pid, state_json, limit])?;
+                    while let Some(row) = rows.next()? {
+                        leases.push(row_to_lease(row)??);
+                    }
+                }
+                (Some(pid), false) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, project_id, workflow_run_id, node_run_id, path, branch, \
+                                base_commit, head_commit, state_json, owner_process_id, \
+                                quarantine_reason, created_at_millis, updated_at_millis \
+                         FROM worktree_leases WHERE project_id = ?1 \
+                         ORDER BY created_at_millis DESC, rowid DESC LIMIT ?2",
+                    )?;
+                    let mut rows = stmt.query(rusqlite::params![pid, limit])?;
+                    while let Some(row) = rows.next()? {
+                        leases.push(row_to_lease(row)??);
+                    }
+                }
+                (None, true) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, project_id, workflow_run_id, node_run_id, path, branch, \
+                                base_commit, head_commit, state_json, owner_process_id, \
+                                quarantine_reason, created_at_millis, updated_at_millis \
+                         FROM worktree_leases WHERE state_json = ?1 \
+                         ORDER BY created_at_millis DESC, rowid DESC LIMIT ?2",
+                    )?;
+                    let mut rows = stmt.query(rusqlite::params![state_json, limit])?;
+                    while let Some(row) = rows.next()? {
+                        leases.push(row_to_lease(row)??);
+                    }
+                }
+                (None, false) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, project_id, workflow_run_id, node_run_id, path, branch, \
+                                base_commit, head_commit, state_json, owner_process_id, \
+                                quarantine_reason, created_at_millis, updated_at_millis \
+                         FROM worktree_leases \
+                         ORDER BY created_at_millis DESC, rowid DESC LIMIT ?1",
+                    )?;
+                    let mut rows = stmt.query(rusqlite::params![limit])?;
+                    while let Some(row) = rows.next()? {
+                        leases.push(row_to_lease(row)??);
+                    }
+                }
+            }
+
+            Ok(leases)
+        })
+        .await?
     }
 
     async fn list_leases_where(
@@ -246,8 +322,7 @@ impl Database {
             }
             Ok(leases)
         })
-        .await
-        .expect("storage worker thread panicked")
+        .await?
     }
 }
 
@@ -361,5 +436,81 @@ mod tests {
         let active = db.list_active_worktree_leases().await.unwrap();
         assert_eq!(active.len(), 2, "b is released, so only a and c are active");
         assert!(active.iter().all(|l| l.state == WorktreeState::Active));
+    }
+
+    #[tokio::test]
+    async fn recent_worktree_leases_respect_limit_and_order_newest_first() {
+        let db = Database::open_in_memory().unwrap();
+        for (i, ts) in [100_u64, 200, 300, 400].into_iter().enumerate() {
+            let mut l = lease(&format!("lease-{i}"));
+            l.created_at_millis = ts;
+            db.insert_worktree_lease(&l).await.unwrap();
+        }
+
+        let recent = db
+            .list_recent_worktree_leases(None, false, 2)
+            .await
+            .unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].created_at_millis, 400);
+        assert_eq!(recent[1].created_at_millis, 300);
+    }
+
+    #[tokio::test]
+    async fn recent_worktree_leases_filter_by_project_and_active_state() {
+        let db = Database::open_in_memory().unwrap();
+        let project_a = ProjectId::new();
+        let project_b = ProjectId::new();
+
+        let mut l1 = lease("pA-active-old");
+        l1.project_id = project_a;
+        l1.state = WorktreeState::Active;
+        l1.created_at_millis = 100;
+
+        let mut l2 = lease("pA-released");
+        l2.project_id = project_a;
+        l2.state = WorktreeState::Released;
+        l2.created_at_millis = 200;
+
+        let mut l3 = lease("pA-active-new");
+        l3.project_id = project_a;
+        l3.state = WorktreeState::Active;
+        l3.created_at_millis = 300;
+
+        let mut l4 = lease("pB-active");
+        l4.project_id = project_b;
+        l4.state = WorktreeState::Active;
+        l4.created_at_millis = 400;
+
+        for l in [&l1, &l2, &l3, &l4] {
+            db.insert_worktree_lease(l).await.unwrap();
+        }
+
+        // Project filter only
+        let for_a = db
+            .list_recent_worktree_leases(Some(project_a), false, 10)
+            .await
+            .unwrap();
+        assert_eq!(for_a.len(), 3);
+        assert!(for_a.iter().all(|l| l.project_id == project_a));
+        assert_eq!(for_a[0].created_at_millis, 300);
+
+        // Active-only filter only
+        let active_only = db
+            .list_recent_worktree_leases(None, true, 10)
+            .await
+            .unwrap();
+        assert_eq!(active_only.len(), 3);
+        assert!(active_only.iter().all(|l| l.state == WorktreeState::Active));
+
+        // Combined project + active_only filter + limit
+        let combined = db
+            .list_recent_worktree_leases(Some(project_a), true, 1)
+            .await
+            .unwrap();
+        assert_eq!(combined.len(), 1);
+        assert_eq!(combined[0].project_id, project_a);
+        assert_eq!(combined[0].state, WorktreeState::Active);
+        assert_eq!(combined[0].created_at_millis, 300);
     }
 }

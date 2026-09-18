@@ -1,0 +1,191 @@
+.operational-surface {
+  margin-block: 2.5rem;
+  border-top: 1px solid #666;
+  padding-top: 1.5rem;
+}
+
+.surface-header h2 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.surface-note {
+  margin: 0.35rem 0 0 0;
+  font-size: 0.9rem;
+  opacity: 0.8;
+  line-height: 1.4;
+}
+
+.surface-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+  margin-block: 1.25rem;
+  padding: 1rem;
+  border: 1px solid #777;
+  border-radius: 4px;
+}
+
+.surface-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.surface-controls input,
+.surface-controls select,
+.surface-controls button {
+  font: inherit;
+  padding: 0.5rem 0.75rem;
+  min-height: 40px;
+  box-sizing: border-box;
+}
+
+.surface-controls button {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.surface-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.surface-table-wrap {
+  overflow-x: auto;
+  margin-block: 1rem;
+}
+
+.surface-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.surface-table th,
+.surface-table td {
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid #555;
+  vertical-align: top;
+}
+
+.surface-table th {
+  font-weight: 600;
+  opacity: 0.9;
+  white-space: nowrap;
+}
+
+.surface-table caption {
+  text-align: left;
+  padding-bottom: 0.5rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.surface-card {
+  border: 1px solid #777;
+  border-radius: 4px;
+  padding: 1rem;
+  margin-block: 1rem;
+}
+
+.surface-card h3 {
+  margin: 0 0 0.5rem 0;
+}
+
+.surface-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.badge-active,
+.badge-pass {
+  background: #1e3a1e;
+  color: #86efac;
+  border: 1px solid #22c55e;
+}
+
+.badge-quarantined,
+.badge-fail,
+.badge-blocker,
+.badge-major {
+  background: #3b1818;
+  color: #fca5a5;
+  border: 1px solid #ef4444;
+}
+
+.badge-released,
+.badge-note {
+  background: #27272a;
+  color: #a1a1aa;
+  border: 1px solid #52525b;
+}
+
+.badge-builtin,
+.badge-minor {
+  background: #1e293b;
+  color: #93c5fd;
+  border: 1px solid #3b82f6;
+}
+
+.badge-custom {
+  background: #2e1065;
+  color: #c4b5fd;
+  border: 1px solid #8b5cf6;
+}
+
+.surface-mono {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.surface-alert {
+  border-left: 4px solid #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+  padding: 0.75rem 1rem;
+  margin-block: 1rem;
+  border-radius: 0 4px 4px 0;
+}
+
+.surface-empty {
+  padding: 1.5rem;
+  text-align: center;
+  border: 1px dashed #666;
+  border-radius: 4px;
+  opacity: 0.8;
+  margin-block: 1rem;
+}
+
+.surface-log {
+  margin: 0.5rem 0 0;
+  max-width: 52rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.8rem;
+}
+
+.surface-evidence-text {
+  margin-top: 0.5rem;
+  max-width: 52rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.surface-node-item {
+  border-left: 3px solid #6366f1;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  background: rgba(99, 102, 241, 0.05);
+  border-radius: 0 4px 4px 0;
+}

@@ -15,6 +15,11 @@ nacc-domain = { workspace = true }
 # shape). Acyclic: nacc-provider-core never mentions storage.
 nacc-provider-core = { workspace = true }
 nacc-events = { workspace = true }
+# Phase 9: persist the canonical evidence/finding types themselves rather
+# than copying their fields into storage-local shadow models. Both crates
+# depend only on lower-level domain/policy crates, so this remains acyclic.
+nacc-quality = { workspace = true }
+nacc-review = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

@@ -14,6 +14,11 @@ export const commands = {
 	listProviderInstallations: () => typedError<ProviderInstallationView[], string>(__TAURI_INVOKE("list_provider_installations")),
 	checkProviderAuth: (args: DetectProviderArgs) => typedError<AuthProbeView, string>(__TAURI_INVOKE("check_provider_auth", { args })),
 	listWorkflowTemplates: () => typedError<WorkflowTemplateView[], string>(__TAURI_INVOKE("list_workflow_templates")),
+	/**
+	 *  Load the complete graph for one template so the GUI can inspect or edit
+	 *  it without reconstructing node settings from the summary list.
+	 */
+	getWorkflowTemplate: (args: TemplateNameArgs) => typedError<WorkflowTemplateDefinitionView, string>(__TAURI_INVOKE("get_workflow_template", { args })),
 	startWorkflowRun: (args: StartRunArgs) => typedError<RunSnapshotView, string>(__TAURI_INVOKE("start_workflow_run", { args })),
 	getWorkflowRun: (args: RunIdArgs) => typedError<RunSnapshotView, string>(__TAURI_INVOKE("get_workflow_run", { args })),
 	listWorkflowRuns: () => typedError<WorkflowRunView[], string>(__TAURI_INVOKE("list_workflow_runs")),
@@ -73,6 +78,22 @@ export const commands = {
 	 *  Writes nothing anywhere.
 	 */
 	checkWorkspace: (args: CheckWorkspaceArgs) => typedError<WorkspaceCheckView, string>(__TAURI_INVOKE("check_workspace", { args })),
+	getGithubAuthStatus: () => typedError<GithubAuthStatus, string>(__TAURI_INVOKE("get_github_auth_status")),
+	getGithubRepository: (args: GithubRepositoryArgs) => typedError<RepositorySummary, string>(__TAURI_INVOKE("get_github_repository", { args })),
+	listGithubBranches: (args: GithubListArgs) => typedError<BranchSummary[], string>(__TAURI_INVOKE("list_github_branches", { args })),
+	listGithubPullRequests: (args: GithubListArgs) => typedError<PullRequestSummary[], string>(__TAURI_INVOKE("list_github_pull_requests", { args })),
+	listGithubCheckRuns: (args: GithubChecksArgs) => typedError<CheckRunSummary[], string>(__TAURI_INVOKE("list_github_check_runs", { args })),
+	listGithubWorkflowRuns: (args: GithubListArgs) => typedError<WorkflowRunSummary[], string>(__TAURI_INVOKE("list_github_workflow_runs", { args })),
+	listGithubWorkflowJobs: (args: GithubRunArgs) => typedError<WorkflowJobSummary[], string>(__TAURI_INVOKE("list_github_workflow_jobs", { args })),
+	getGithubFailedRunEvidence: (args: GithubRunArgs) => typedError<FailedRunEvidence[], string>(__TAURI_INVOKE("get_github_failed_run_evidence", { args })),
+	listGithubArtifacts: (args: GithubListArgs) => typedError<ArtifactSummary[], string>(__TAURI_INVOKE("list_github_artifacts", { args })),
+	listGithubEnvironments: (args: GithubListArgs) => typedError<EnvironmentSummary[], string>(__TAURI_INVOKE("list_github_environments", { args })),
+	listGithubPendingDeployments: (args: GithubRunArgs) => typedError<PendingDeploymentSummary[], string>(__TAURI_INVOKE("list_github_pending_deployments", { args })),
+	rerunFailedGithubWorkflow: (args: GithubRerunFailedArgs) => typedError<null, string>(__TAURI_INVOKE("rerun_failed_github_workflow", { args })),
+	listWorktreeLeases: (args: ListWorktreeLeasesArgs) => typedError<WorktreeLeaseView[], string>(__TAURI_INVOKE("list_worktree_leases", { args })),
+	listAuditRecords: (args: ListAuditRecordsArgs) => typedError<AuditRecordView[], string>(__TAURI_INVOKE("list_audit_records", { args })),
+	listQualityGateResults: (args: ListEvidenceArgs) => typedError<QualityGateResultView[], string>(__TAURI_INVOKE("list_quality_gate_results", { args })),
+	listReviewFindings: (args: ListEvidenceArgs) => typedError<ReviewFindingView[], string>(__TAURI_INVOKE("list_review_findings", { args })),
 };
 
 /* Types */
@@ -129,6 +150,44 @@ export type ApprovalView = {
 	decided_at_millis: string | null,
 };
 
+export type ArtifactSummary = {
+	id: string,
+	name: string,
+	size_in_bytes: string,
+	expired: boolean,
+	created_at: string,
+	expires_at: string,
+	workflow_run_id: string | null,
+	head_sha: string | null,
+	archive_download_url: string,
+};
+
+/** Identifies one attempt of a `NodeRun` -- a node may be retried, and each retry is its own attempt (master plan S7). */
+export type AttemptId = string;
+
+/** Identifies one entry in the audit trail (master plan S7's `AuditEvent`, S22's audit-record fields). */
+export type AuditEventId = string;
+
+export type AuditRecordView = {
+	id: AuditEventId,
+	actor: string,
+	action: string,
+	project_id: ProjectId | null,
+	workflow_run_id: WorkflowRunId | null,
+	node_run_id: NodeRunId | null,
+	attempt_id: AttemptId | null,
+	requested_provider: ProviderId | null,
+	actual_provider: ProviderId | null,
+	requested_model: ModelId | null,
+	actual_model: ModelId | null,
+	effective_reasoning_level: ReasoningLevel | null,
+	effective_permission_profile: PermissionProfile | null,
+	command_executable: string | null,
+	redacted_arguments: string[],
+	working_directory: string | null,
+	created_at_millis: string,
+};
+
 /**
  *  Point-in-time sign-in status for one provider. Not persisted: the
  *  adapters check the native credential store's *existence* live on every
@@ -141,6 +200,12 @@ export type AuthProbeView = {
 	account_label: string | null,
 	detail: string | null,
 	checked_at_millis: string,
+};
+
+export type BranchSummary = {
+	name: string,
+	commit_sha: string,
+	protected: boolean,
 };
 
 /**
@@ -167,6 +232,17 @@ export type CheckPrerequisitesArgs = {
 	 *  and the wizard should only spend that on steps the user is on.
 	 */
 	include_gh: boolean,
+};
+
+export type CheckRunSummary = {
+	id: string,
+	name: string,
+	status: string,
+	conclusion: string | null,
+	details_url: string | null,
+	started_at: string | null,
+	completed_at: string | null,
+	app_name: string | null,
 };
 
 export type CheckWorkspaceArgs = {
@@ -217,6 +293,15 @@ export type DetectProviderArgs = {
 	provider_id: ProviderId,
 };
 
+export type EnvironmentSummary = {
+	id: string,
+	name: string,
+	url: string,
+	html_url: string,
+	can_admins_bypass: boolean | null,
+	protection_rule_count: number,
+};
+
 /**
  *  The normalized event vocabulary (master plan S8.2): what every provider
  *  adapter's raw output is mapped to before workflow logic or the audit
@@ -233,6 +318,70 @@ export type EventType = "session_started" | "assistant_text_delta" |
  *  happening, never to carry its content.
  */
 "reasoning_status" | "tool_requested" | "tool_approved" | "tool_denied" | "tool_started" | "tool_output_delta" | "file_changed" | "command_started" | "command_output" | "command_completed" | "plan_artifact_emitted" | "handoff_emitted" | "usage_updated" | "approval_requested" | "warning" | "recoverable_error" | "terminal_error" | "session_completed" | "session_cancelled";
+
+export type FailedRunEvidence = {
+	run_id: string,
+	job_id: string,
+	job_name: string,
+	classification: FailureClass,
+	matched_evidence: string | null,
+	log_excerpt: string,
+};
+
+/**
+ *  The failure classes the master plan's CI/CD flow distinguishes. `Unknown`
+ *  is a real answer: an unclassified failure needs a human, not a rerun.
+ */
+export type FailureClass = "product_defect" | "stale_test" | "flakiness" | "environment" | "dependency" | "workflow_config" | "secret_missing" | "external_service" | "timeout" | "resource_exhaustion" | "permissions" | "unknown";
+
+export type GithubAuthStatus = {
+	authenticated: boolean,
+	login: string | null,
+};
+
+export type GithubChecksArgs = {
+	repository: string,
+	commit_sha: string,
+	limit: number,
+};
+
+export type GithubListArgs = {
+	repository: string,
+	limit: number,
+};
+
+export type GithubRepositoryArgs = {
+	repository: string,
+};
+
+export type GithubRerunFailedArgs = {
+	repository: string,
+	run_id: string,
+	approved_by: string,
+	reason: string,
+};
+
+export type GithubRunArgs = {
+	repository: string,
+	run_id: string,
+};
+
+export type ListAuditRecordsArgs = {
+	workflow_run_id: WorkflowRunId | null,
+	limit: number | null,
+};
+
+export type ListEvidenceArgs = {
+	workflow_run_id: WorkflowRunId | null,
+	node_run_id: NodeRunId | null,
+	limit: number | null,
+};
+
+export type ListWorktreeLeasesArgs = {
+	project_id: ProjectId | null,
+	active_only?: boolean,
+	limit: number | null,
+};
 
 /**
  *  IPC view over one discovered model: exactly what the adapter reported
@@ -301,6 +450,14 @@ export type NodeState =
 /**  A dependency failed, so this node will never run. */
 "skipped" | "cancelled";
 
+export type PendingDeploymentSummary = {
+	environment_id: string,
+	environment_name: string,
+	wait_timer: number,
+	current_user_can_approve: boolean,
+	reviewer_logins: string[],
+};
+
 /**
  *  Permission profile a running agent operates under (master plan S12.1).
  *  Enforced by `nacc-policy` before every privileged operation; never
@@ -355,6 +512,52 @@ export type ProviderInstallationView = {
 	detected_at_millis: string,
 };
 
+export type PullRequestSummary = {
+	number: number,
+	title: string,
+	state: string,
+	is_draft: boolean,
+	head_ref_name: string,
+	base_ref_name: string,
+	url: string,
+	author_login: string | null,
+	merge_state_status: string | null,
+};
+
+export type QualityGateResultView = {
+	workflow_run_id: WorkflowRunId,
+	node_run_id: NodeRunId,
+	attempt_id: AttemptId | null,
+	gate: string,
+	command: string,
+	passed: boolean,
+	exit_code: number | null,
+	timed_out: boolean,
+	duration_ms: string,
+	log_tail: string,
+	created_at_millis: string,
+};
+
+/**
+ *  A deterministic command that a workflow node declares as completion
+ *  evidence. This is intentionally a declarative domain contract rather than
+ *  an executable policy: `nacc-quality` owns spawning and policy checks while
+ *  the orchestrator owns when declared gates become part of node completion.
+ */
+export type QualityGateSpec = {
+	/**  Stable within one node and used to correlate durable evidence. */
+	name: string,
+	/**  Exact executable plus arguments. This is never a shell command string. */
+	argv: string[],
+	/**  Per-gate execution ceiling in seconds. `u32` stays IPC-safe for specta. */
+	timeout_secs: number,
+	/**
+	 *  Required gates will eventually participate in the node completion
+	 *  predicate; optional gates remain evidence without blocking completion.
+	 */
+	required: boolean,
+};
+
 export type ReasonArgs = {
 	run_id: WorkflowRunId,
 	reason: string,
@@ -370,6 +573,28 @@ export type ReasonArgs = {
  *  per-role controls (role / model / thinking / reasoning effort).
  */
 export type ReasoningLevel = "auto" | "off" | "minimal" | "low" | "medium" | "high" | "extra_high" | "maximum";
+
+export type RepositorySummary = {
+	name_with_owner: string,
+	default_branch: string | null,
+	is_private: boolean,
+	url: string,
+};
+
+export type ReviewFindingView = {
+	workflow_run_id: WorkflowRunId,
+	node_run_id: NodeRunId,
+	attempt_id: AttemptId | null,
+	node_key: string,
+	file: string,
+	line: number | null,
+	severity: ReviewSeverityView,
+	summary: string,
+	evidence: string,
+	created_at_millis: string,
+};
+
+export type ReviewSeverityView = "blocker" | "major" | "minor" | "note";
 
 /**
  *  The role catalog (Phase 0 plan addendum's "locked GUI requirement",
@@ -516,6 +741,17 @@ export type WorkflowEventView = {
 	created_at_millis: string,
 };
 
+export type WorkflowJobSummary = {
+	database_id: string,
+	name: string,
+	status: string,
+	conclusion: string | null,
+	started_at: string | null,
+	completed_at: string | null,
+	url: string,
+	steps: WorkflowStepSummary[],
+};
+
 /**  One node of a workflow template (master plan S14.2's DAG). */
 export type WorkflowNode = {
 	/**  Stable within a template; what `depends_on` and the UI refer to. */
@@ -548,11 +784,31 @@ export type WorkflowNode = {
 	 *  because specta refuses pointer-width integers across IPC.
 	 */
 	timeout_secs?: number | null,
+	/**
+	 *  Machine-readable deterministic checks declared by this node. Older
+	 *  persisted templates predate this field, so absence must remain exactly
+	 *  equivalent to declaring no quality gates.
+	 */
+	quality_gates?: QualityGateSpec[],
 	fallbacks: NodeFallback[],
 };
 
 /** Identifies one execution of a workflow template. */
 export type WorkflowRunId = string;
+
+export type WorkflowRunSummary = {
+	database_id: string,
+	name: string,
+	workflow_name: string,
+	status: string,
+	conclusion: string | null,
+	event: string,
+	head_branch: string | null,
+	head_sha: string,
+	url: string,
+	created_at: string,
+	updated_at: string,
+};
 
 export type WorkflowRunView = {
 	id: WorkflowRunId,
@@ -562,6 +818,23 @@ export type WorkflowRunView = {
 	note: string | null,
 	created_at_millis: string,
 	updated_at_millis: string,
+};
+
+export type WorkflowStepSummary = {
+	number: number,
+	name: string,
+	status: string,
+	conclusion: string | null,
+	started_at: string | null,
+	completed_at: string | null,
+};
+
+export type WorkflowTemplateDefinitionView = {
+	name: string,
+	description: string,
+	nodes: WorkflowNode[],
+	version: number,
+	is_built_in: boolean,
 };
 
 export type WorkflowTemplateView = {
@@ -581,6 +854,33 @@ export type WorkspaceCheckView = {
 	path: string,
 	is_git_repo: boolean,
 };
+
+/** Identifies one NACC-allocated Git worktree lease (master plan S16's worktree lifecycle). */
+export type WorktreeLeaseId = string;
+
+export type WorktreeLeaseView = {
+	id: WorktreeLeaseId,
+	project_id: ProjectId,
+	workflow_run_id: WorkflowRunId | null,
+	node_run_id: NodeRunId | null,
+	path: string,
+	branch: string,
+	base_commit: string,
+	head_commit: string | null,
+	state: WorktreeState,
+	owner_process_id: number | null,
+	quarantine_reason: string | null,
+	created_at_millis: string,
+	updated_at_millis: string,
+};
+
+/**
+ *  Lifecycle state of a worktree lease (master plan S16: allocation,
+ *  integration, release, quarantine). Closed and exhaustive on purpose: the
+ *  whole point of the lease record is that "what happened to this
+ *  worktree?" always has exactly one answer.
+ */
+export type WorktreeState = "active" | "quarantined" | "released";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

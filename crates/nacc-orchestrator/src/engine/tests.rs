@@ -7,13 +7,14 @@
 //! storage layer would catch.
 
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nacc_domain::{
-    AttemptId, AttemptTrigger, NodeFallback, NodeState, PermissionProfile, ProviderId, RoleKind,
-    RunState, WorkflowNode, WorkflowRunId, WorkflowTemplate,
+    AttemptId, AttemptTrigger, NodeFallback, NodeState, PermissionProfile, ProviderId,
+    QualityGateSpec, RoleKind, RunState, WorkflowNode, WorkflowRunId, WorkflowTemplate,
 };
 use nacc_storage::Database;
 use tokio::sync::{watch, Barrier};
@@ -260,6 +261,7 @@ fn node(key: &str, role: RoleKind, depends_on: &[&str]) -> WorkflowNode {
         retryable: true,
         requires_approval: false,
         timeout_secs: None,
+        quality_gates: vec![],
         fallbacks: vec![],
     }
 }
@@ -285,6 +287,47 @@ fn all_roles_claude() -> StaticRouting {
     )
 }
 
+#[derive(Clone)]
+struct WorkspaceRouting {
+    inner: StaticRouting,
+    workspace: Option<PathBuf>,
+}
+
+impl RoleRouting for WorkspaceRouting {
+    fn provider_for(&self, role: &RoleKind) -> Option<ProviderId> {
+        self.inner.provider_for(role)
+    }
+
+    fn workspace_for(
+        &self,
+        _project_id: ProjectId,
+        _run_id: WorkflowRunId,
+        _node_key: &str,
+    ) -> Option<PathBuf> {
+        self.workspace.clone()
+    }
+}
+
+fn quality_gate(name: &str, required: bool, passes: bool) -> QualityGateSpec {
+    let executable = std::env::current_exe()
+        .expect("current test executable")
+        .to_string_lossy()
+        .into_owned();
+    QualityGateSpec {
+        name: name.to_string(),
+        argv: vec![
+            executable,
+            if passes {
+                "--list".to_string()
+            } else {
+                "--definitely-invalid-nacc-test-flag".to_string()
+            },
+        ],
+        timeout_secs: 10,
+        required,
+    }
+}
+
 struct Harness {
     db: Arc<Database>,
     clock: Arc<VirtualClock>,
@@ -306,6 +349,26 @@ fn harness(executor: FakeExecutor, routing: StaticRouting, config: EngineConfig)
 
 fn harness_with(executor: FakeExecutor, routing: StaticRouting) -> Harness {
     harness(executor, routing, EngineConfig::default())
+}
+
+fn harness_with_workspace(
+    executor: FakeExecutor,
+    workspace: Option<PathBuf>,
+    config: EngineConfig,
+) -> Harness {
+    let db = Arc::new(Database::open_in_memory().expect("in-memory database"));
+    let clock = Arc::new(VirtualClock::starting_at(1_000));
+    let engine = WorkflowEngine::new(
+        db.clone(),
+        Arc::new(executor),
+        Arc::new(WorkspaceRouting {
+            inner: all_roles_claude(),
+            workspace,
+        }),
+        clock.clone(),
+        config,
+    );
+    Harness { db, clock, engine }
 }
 
 fn fast_config() -> EngineConfig {
@@ -529,6 +592,188 @@ async fn a_retryable_failure_is_retried_after_a_backoff_and_can_succeed() {
     assert!(
         elapsed >= 5_000,
         "the retry should have waited out the 5s base backoff, elapsed {elapsed}ms"
+    );
+}
+
+#[tokio::test]
+async fn a_passing_required_quality_gate_is_persisted_before_node_success() {
+    let executor = FakeExecutor::new();
+    let harness = harness_with_workspace(
+        executor,
+        Some(std::env::temp_dir()),
+        EngineConfig::default(),
+    );
+    let mut gated_node = node("implement", IMPLEMENTER, &[]);
+    gated_node.quality_gates = vec![quality_gate("required-pass", true, true)];
+
+    let snapshot = harness
+        .engine
+        .start_and_run(
+            ProjectId::new(),
+            &template("required-gate-pass", vec![gated_node]),
+        )
+        .await
+        .expect("run should complete");
+
+    assert_eq!(snapshot.run.state, RunState::Succeeded);
+    assert_eq!(state_of(&snapshot, "implement"), NodeState::Succeeded);
+    assert_eq!(snapshot.attempts.len(), 1);
+    assert_eq!(
+        snapshot.attempts[0].finished_state,
+        Some(NodeState::Succeeded)
+    );
+    let node_run = snapshot.node("implement").expect("node run");
+    let evidence = harness
+        .db
+        .list_recent_quality_gate_results(Some(snapshot.run.id), Some(node_run.id), 10)
+        .await
+        .expect("quality evidence should be readable");
+    assert_eq!(evidence.len(), 1);
+    assert!(evidence[0].evidence.passed);
+    assert_eq!(evidence[0].evidence.gate, "required-pass");
+    assert_eq!(evidence[0].attempt_id, Some(snapshot.attempts[0].id));
+}
+
+#[tokio::test]
+async fn a_failing_required_quality_gate_blocks_success_and_retries_the_node() {
+    let executor = FakeExecutor::new();
+    let harness = harness_with_workspace(
+        executor.clone(),
+        Some(std::env::temp_dir()),
+        EngineConfig {
+            retry: RetryPolicy {
+                max_attempts: 2,
+                base_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(1),
+            },
+            ..EngineConfig::default()
+        },
+    );
+    let mut gated_node = node("implement", IMPLEMENTER, &[]);
+    gated_node.quality_gates = vec![
+        quality_gate("required-fail", true, false),
+        quality_gate("optional-pass", false, true),
+    ];
+
+    let snapshot = harness
+        .engine
+        .start_and_run(
+            ProjectId::new(),
+            &template("required-gate-fail", vec![gated_node]),
+        )
+        .await
+        .expect("gate failure is a node result, not an engine error");
+
+    assert_eq!(snapshot.run.state, RunState::Failed);
+    assert_eq!(state_of(&snapshot, "implement"), NodeState::Failed);
+    assert_eq!(snapshot.attempts.len(), 2);
+    assert_eq!(executor.requests("implement").len(), 2);
+    assert!(snapshot
+        .attempts
+        .iter()
+        .all(|attempt| attempt.finished_state == Some(NodeState::Failed)));
+    let detail = snapshot
+        .node("implement")
+        .and_then(|node| node.last_detail.as_deref())
+        .unwrap_or_default();
+    assert!(detail.contains("required quality gate"), "{detail}");
+    assert!(detail.contains("required-fail"), "{detail}");
+
+    let node_run = snapshot.node("implement").expect("node run");
+    let evidence = harness
+        .db
+        .list_recent_quality_gate_results(Some(snapshot.run.id), Some(node_run.id), 10)
+        .await
+        .expect("quality evidence should be readable");
+    assert_eq!(
+        evidence.len(),
+        4,
+        "both declared gates should run on both attempts"
+    );
+    assert_eq!(
+        evidence
+            .iter()
+            .filter(|record| record.evidence.gate == "required-fail")
+            .count(),
+        2
+    );
+    assert_eq!(
+        evidence
+            .iter()
+            .filter(|record| record.evidence.gate == "optional-pass")
+            .count(),
+        2
+    );
+    assert!(evidence.iter().all(|record| record.attempt_id.is_some()));
+}
+
+#[tokio::test]
+async fn a_failing_optional_quality_gate_is_evidence_but_does_not_block_success() {
+    let harness = harness_with_workspace(
+        FakeExecutor::new(),
+        Some(std::env::temp_dir()),
+        EngineConfig::default(),
+    );
+    let mut gated_node = node("implement", IMPLEMENTER, &[]);
+    gated_node.quality_gates = vec![quality_gate("optional-fail", false, false)];
+
+    let snapshot = harness
+        .engine
+        .start_and_run(
+            ProjectId::new(),
+            &template("optional-gate-fail", vec![gated_node]),
+        )
+        .await
+        .expect("run should complete");
+
+    assert_eq!(snapshot.run.state, RunState::Succeeded);
+    assert_eq!(state_of(&snapshot, "implement"), NodeState::Succeeded);
+    assert_eq!(snapshot.attempts.len(), 1);
+    let node_run = snapshot.node("implement").expect("node run");
+    let evidence = harness
+        .db
+        .list_recent_quality_gate_results(Some(snapshot.run.id), Some(node_run.id), 10)
+        .await
+        .expect("quality evidence should be readable");
+    assert_eq!(evidence.len(), 1);
+    assert!(!evidence[0].evidence.passed);
+    assert_eq!(evidence[0].evidence.gate, "optional-fail");
+}
+
+#[tokio::test]
+async fn declared_quality_gates_without_a_workspace_fail_visibly_and_do_not_retry() {
+    let executor = FakeExecutor::new();
+    let harness = harness_with_workspace(executor.clone(), None, EngineConfig::default());
+    let mut gated_node = node("implement", IMPLEMENTER, &[]);
+    gated_node.quality_gates = vec![quality_gate("required-pass", true, true)];
+
+    let snapshot = harness
+        .engine
+        .start_and_run(
+            ProjectId::new(),
+            &template("missing-gate-workspace", vec![gated_node]),
+        )
+        .await
+        .expect("missing workspace is a durable node failure");
+
+    assert_eq!(snapshot.run.state, RunState::Failed);
+    assert_eq!(state_of(&snapshot, "implement"), NodeState::Failed);
+    assert_eq!(snapshot.attempts.len(), 1);
+    assert_eq!(executor.requests("implement").len(), 1);
+    let detail = snapshot
+        .node("implement")
+        .and_then(|node| node.last_detail.as_deref())
+        .unwrap_or_default();
+    assert!(detail.contains("no workspace is assigned"), "{detail}");
+    let node_run = snapshot.node("implement").expect("node run");
+    let evidence = harness
+        .db
+        .list_recent_quality_gate_results(Some(snapshot.run.id), Some(node_run.id), 10)
+        .await
+        .expect("quality evidence should be readable");
+    assert!(
+        evidence.is_empty(),
+        "no gate was executed without a workspace"
     );
 }
 
