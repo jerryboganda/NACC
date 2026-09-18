@@ -43,18 +43,21 @@ jobs:
         shell: pwsh
         run: |
           $installers = @(Get-ChildItem target/release/bundle/nsis/*.exe -ErrorAction Stop)
-          if ($installers.Count -lt 1) { throw "NSIS installer was not produced" }
-
-          $updaterArchives = @(Get-ChildItem target/release/bundle/nsis/*.nsis.zip -ErrorAction Stop)
-          $updaterSignatures = @(Get-ChildItem target/release/bundle/nsis/*.nsis.zip.sig -ErrorAction Stop)
-          if ($updaterArchives.Count -lt 1 -or $updaterSignatures.Count -lt 1) {
-            throw "Tauri updater artifacts were not produced despite createUpdaterArtifacts=true"
+          if ($installers.Count -ne 1) {
+            throw "expected exactly one NSIS installer; got $($installers.Count)"
           }
 
-          # These updater files are signed by a throwaway key and MUST NOT be
-          # consumed by users or uploaded as release assets.
-          Remove-Item target/release/bundle/nsis/*.nsis.zip -Force
-          Remove-Item target/release/bundle/nsis/*.nsis.zip.sig -Force
+          $expectedSignature = "$($installers[0].FullName).sig"
+          if (-not (Test-Path $expectedSignature -PathType Leaf)) {
+            throw "Tauri updater signature was not produced for $($installers[0].Name)"
+          }
+          if ((Get-Item $expectedSignature).Length -le 0) {
+            throw "Tauri updater signature is empty"
+          }
+
+          # This updater signature is created with a throwaway key and MUST NOT
+          # be consumed by users or uploaded as a release asset.
+          Remove-Item $expectedSignature -Force
       - uses: actions/upload-artifact@v4
         with:
           name: nacc-windows-unsigned-build-evidence
