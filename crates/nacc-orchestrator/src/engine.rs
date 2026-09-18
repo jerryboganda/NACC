@@ -1490,7 +1490,7 @@ async fn run_attempt(
     // evidence only; required failures become ordinary attempt failures so the
     // node's existing retry contract stays authoritative.
     let should_run_gates =
-        !node.quality_gates.is_empty() && matches!(&outcome, Ok(_)) && !overtaken_after_executor;
+        !node.quality_gates.is_empty() && outcome.is_ok() && !overtaken_after_executor;
     let outcome = match outcome {
         Ok(outcome) if should_run_gates => match run_declared_quality_gates(
             &persistence,
